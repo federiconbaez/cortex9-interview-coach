@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: CORTEX-9 Interview Coach API
-  version: 1.0.0
+  version: 1.2.0
   summary: API del backend del simulador de entrevistas por voz (solo para práctica).
   description: |
     API REST y WebSocket del backend (`/backend`, Go). El contrato humano completo,
@@ -1213,6 +1213,10 @@ components:
                 tts_delivery: { type: array, items: { type: string, enum: [binary, url, none] } }
                 tts_formats: { type: array, items: { type: string, enum: [pcm16le, wav] } }
                 partials: { type: boolean, default: true }
+                endpointing:
+                  type: boolean
+                  default: true
+                  description: 'v1.2: endpointing por silencio para esta conexión; false = el turno se cierra solo con audio.end (contrato §5.15).'
                 resume:
                   type: [object, 'null']
                   required: [last_server_seq]
@@ -1241,6 +1245,15 @@ components:
                 last_client_seq: { type: integer }
                 question_index: { type: integer }
                 question_count: { type: integer }
+                endpointing: { $ref: '#/components/schemas/WsEndpointInfo' }
+    WsEndpointInfo:
+      description: 'v1.2: endpointing efectivo de la conexión (contrato §5.15). Solo se analiza el audio del micrófono del usuario en su turno.'
+      type: object
+      required: [enabled, mode, silence_ms]
+      properties:
+        enabled: { type: boolean }
+        mode: { type: string, enum: ['off', stt, energy, auto] }
+        silence_ms: { type: integer }
     WsSessionState:
       type: string
       enum: [ready, intro, asking, listening, processing, paused, closing, ended]
@@ -1379,7 +1392,7 @@ components:
               required: [turn_id, reason, next, followups_used, max_followups]
               properties:
                 turn_id: { type: string }
-                reason: { type: string, enum: [audio_end, text, skip, max_duration, no_audio, repeat] }
+                reason: { type: string, enum: [audio_end, endpoint, text, skip, max_duration, no_audio, repeat] }
                 next: { type: string, enum: [followup, question, repeat, end] }
                 followups_used: { type: integer, minimum: 0, maximum: 2 }
                 max_followups: { type: integer, minimum: 0, maximum: 2 }
@@ -1516,6 +1529,7 @@ components:
               properties:
                 turn_id: { type: string }
     WsTtsPlayed:
+      description: 'cliente→servidor, una vez por utterance_id (duplicados y viejos se ignoran). Solo con tts_delivery binary|url. El servidor lo espera para intro/question/followup (no para el cierre); si no llega en duration_ms + CX9_TTS_PLAYED_GRACE_MS (o CX9_TTS_PLAYED_TIMEOUT_MS sin duración) avanza igual, sin error (contrato §5.14).'
       allOf:
         - $ref: '#/components/schemas/WsEnvelope'
         - type: object

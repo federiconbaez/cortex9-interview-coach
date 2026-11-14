@@ -53,6 +53,8 @@ export type Hello = Envelope<"hello", {
   /** Solo wav y pcm16le. opus no existe para TTS en v1. */
   tts_formats?: Array<"pcm16le" | "wav">;
   partials?: boolean;
+  /** v1.2: endpointing por silencio para esta conexión (default true). false = el turno se cierra solo con audio.end. */
+  endpointing?: boolean;
   resume?: { last_server_seq: number } | null;
 }>;
 
@@ -65,7 +67,12 @@ export type ControlResume = Envelope<"control.resume", { turn_id?: string }>;
 export type ControlSkip = Envelope<"control.skip", { turn_id: string }>;
 export type ControlEnd = Envelope<"control.end", Record<string, never>>;
 export type ControlRepeat = Envelope<"control.repeat", { turn_id: string }>;
-/** Solo con tts_delivery binary|url. Con tts_delivery=none el cliente NO lo manda y el servidor no lo espera. */
+/**
+ * Solo con tts_delivery binary|url, UNA vez por utterance_id (duplicados y viejos se ignoran).
+ * El servidor lo espera para intro/question/followup (no para el cierre) y, si no llega en
+ * duration_ms + CX9_TTS_PLAYED_GRACE_MS (o CX9_TTS_PLAYED_TIMEOUT_MS sin duración), avanza igual.
+ * Con tts_delivery=none el cliente NO lo manda y el servidor no lo espera.
+ */
 export type TtsPlayed = Envelope<"tts.played", { utterance_id: string }>;
 export type Ping = Envelope<"ping", { nonce: string }>;
 export type Pong = Envelope<"pong", { nonce: string }>;
@@ -90,7 +97,16 @@ export type SessionReady = Envelope<"session.ready", {
   last_client_seq: number;
   question_index?: number;
   question_count?: number;
+  /** v1.2: endpointing efectivo de la conexión. */
+  endpointing?: EndpointInfo;
 }>;
+
+/** v1.2 (contrato §5.15). Solo se analiza el audio del micrófono del usuario en su turno. */
+export interface EndpointInfo {
+  enabled: boolean;
+  mode: "off" | "stt" | "energy" | "auto";
+  silence_ms: number;
+}
 
 export type Question = Envelope<"question", {
   turn_id: string;
@@ -162,7 +178,8 @@ export type Resume = Envelope<"resume", { state: SessionState }>;
 
 export type TurnEnd = Envelope<"turn.end", {
   turn_id: string;
-  reason: "audio_end" | "text" | "skip" | "max_duration" | "no_audio" | "repeat";
+  /** endpoint (v1.2): el servidor cerró el turno por silencio, sin audio.end. */
+  reason: "audio_end" | "endpoint" | "text" | "skip" | "max_duration" | "no_audio" | "repeat";
   next: "followup" | "question" | "repeat" | "end";
   followups_used: 0 | 1 | 2;
   max_followups: 0 | 1 | 2;

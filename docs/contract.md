@@ -1,6 +1,6 @@
 # Contrato del CORTEX-9 Interview Coach (v1)
 
-Ref: CX9-6174 · Estado: **v1.1, estable** (cambios compatibles sobre v1.0, ver §9) · Licencia: Apache-2.0
+Ref: CX9-6174 · Estado: **v1.2, estable** (cambios compatibles sobre v1.0, ver §9) · Licencia: Apache-2.0
 
 Este documento es el contrato entre las tres partes del repo:
 
@@ -544,24 +544,24 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 
 | type | Cuándo | data |
 |---|---|---|
-| `hello` | Primer mensaje, siempre `seq: 0` | `client`, `audio_formats[]`, `tts_delivery[]` (`binary`/`url`/`none`), `tts_formats[]` (`wav`/`pcm16le`), `partials`, `resume{last_server_seq}` |
+| `hello` | Primer mensaje, siempre `seq: 0` | `client`, `audio_formats[]`, `tts_delivery[]` (`binary`/`url`/`none`), `tts_formats[]` (`wav`/`pcm16le`), `partials`, `endpointing?` (bool, default `true`; `false` = el turno se cierra solo con `audio.end`, §5.15), `resume{last_server_seq}` |
 | *(binario kind 0x01)* `audio.chunk` | Mientras el usuario habla, solo en estado `listening` | header §5.4 + PCM16 |
 | `audio.chunk` (JSON, fallback) | Igual, si no puede binario | `turn_id`, `chunk_index`, `audio_b64` |
-| `audio.end` | Fin del turno de voz (VAD del cliente o push-to-talk) | `turn_id`, `chunks`, `bytes`, `duration_ms` |
+| `audio.end` | Cierre explícito del turno de voz (botón, push-to-talk o VAD del cliente). Sigue valiendo con endpointing activo; si el servidor ya cerró el turno por silencio, llega tarde y se ignora con `STATE_CONFLICT` no fatal | `turn_id`, `chunks`, `bytes`, `duration_ms` |
 | `answer.text` | Respuesta escrita (sesiones `input: text`) | `turn_id`, `text` (≤ 8000) |
 | `control.pause` | Pausar | `turn_id?` |
 | `control.resume` | Reanudar | `turn_id?` |
 | `control.skip` | Saltar la pregunta actual (y sus repreguntas) | `turn_id` |
 | `control.repeat` | Repetir la pregunta actual (como `/repetir`) | `turn_id` |
 | `control.end` | Terminar la sesión y armar el informe con lo respondido | `{}` |
-| `tts.played` | Terminó de reproducir una intervención (el servidor pasa a `listening`). **Solo** con `tts_delivery` `binary` o `url`: con `none` el cliente no lo manda y el servidor no lo espera (pasa a `listening` al mandar la pregunta) | `utterance_id` |
+| `tts.played` | Terminó de reproducir una intervención. **Una vez por `utterance_id`**. Reglas de espera, `none` y timeout en §5.14 | `utterance_id` |
 | `ping` / `pong` | Heartbeat de aplicación | `nonce` |
 
 **Servidor → cliente**
 
 | type | Cuándo | data |
 |---|---|---|
-| `session.ready` | Respuesta a `hello` | `state`, `audio_format`, `tts_delivery`, `tts_format`, `heartbeat_ms` (15000), `idle_timeout_ms` (45000), `max_inflight_bytes`, `max_turn_ms`, `resumed`, `last_client_seq`, `question_index`, `question_count` |
+| `session.ready` | Respuesta a `hello` | `state`, `audio_format`, `tts_delivery`, `tts_format`, `heartbeat_ms` (15000), `idle_timeout_ms` (45000), `max_inflight_bytes`, `max_turn_ms`, `resumed`, `last_client_seq`, `question_index`, `question_count`, `endpointing{enabled, mode, silence_ms}` (v1.2, §5.15) |
 | `question` | Nueva pregunta principal (también intro/cierre/repetición con `kind`) | `turn_id`, `question_id`, `index`, `total`, `text`, `lang`, `utterance_id`, `kind`, `repeat?` |
 | `followup` | Repregunta | `turn_id`, `question_id`, `followup_index` (1 o 2), `max_followups` (≤ 2), `probe` (incluye `other`), `text`, `utterance_id`, `repeat?` |
 | `tts.audio` | Audio de la intervención por WS; le siguen `chunks` frames binarios kind 0x02 | `utterance_id`, `format` (`wav`/`pcm16le`), `sample_rate`, `duration_ms`, `chunks`, `bytes`, `sha256?` |
@@ -570,7 +570,7 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 | `transcript.final` | Transcripción final del turno | `turn_id`, `text`, `duration_ms`, `confidence`, `low_confidence[]`, `source` (`stt`/`text`) |
 | `pause` | Pausa (pedida, tiempo para pensar o reconexión) | `reason`, `resume_after_ms?`, `max_pause_ms` |
 | `resume` | Fin de la pausa | `state` |
-| `turn.end` | Cierre del turno con qué sigue | `turn_id`, `reason`, `next` (`followup`/`question`/`repeat`/`end`), `followups_used`, `max_followups` |
+| `turn.end` | Cierre del turno con qué sigue | `turn_id`, `reason` (`audio_end`/`endpoint`/`text`/`skip`/`max_duration`/`no_audio`/`repeat`), `next` (`followup`/`question`/`repeat`/`end`), `followups_used`, `max_followups` |
 | `session.end` | Fin de la sesión con resumen | `reason`, `report_url`, `summary{questions_asked, questions_answered, followups_asked, skipped, total_answer_ms, report_status}` |
 | `error` | Error | `code`, `message`, `fatal`, `retryable`, `ref_seq?`, `close_code?` |
 | `ack` | Ack periódico en `listening` (§5.8), siempre `seq: 0` y con `ack` en el sobre | `last_client_seq` |
@@ -585,6 +585,7 @@ Reglas del motor que el cliente puede asumir:
 - `control.repeat` re-emite **la misma** intervención vigente: mismo `turn_id`, mismo `question_id`, `utterance_id` y `seq` nuevos y `repeat: true` (`question` con `kind:"repeat"`, o el `followup` con el mismo `followup_index` y `probe`). **No** hay `turn.end` y **no** consume repregunta. Si había audio parcial de ese turno, se descarta.
 - `index` de `question`: 1-based para preguntas; la intro usa `index: 0` y el cierre `index: total`, ambos con `turn_id: "t-0"` (no esperan respuesta). El cierre va antes de `session.end` y el servidor no espera `tts.played` para él.
 - `max_turn_ms` (por defecto 300000): al superarlo el servidor cierra el turno como si hubiera llegado `audio.end` (`turn.end.reason = "max_duration"`) y descarta chunks posteriores de ese turno.
+- Endpointing (§5.15): si el servidor cierra el turno por silencio (`turn.end.reason = "endpoint"`), los chunks de ese turno que lleguen después se descartan **sin error** (el cliente todavía no vio el `turn.end`); el cliente deja de mandar audio al recibirlo.
 
 ### 5.6 Diagrama de estados de la sesión (WS)
 
@@ -593,9 +594,9 @@ stateDiagram-v2
     [*] --> ready: hello / session.ready
     ready --> intro: (intro del escenario)
     ready --> asking: sin intro
-    intro --> asking
-    asking --> listening: tts.played / fin de TTS / sin TTS
-    listening --> processing: audio.end | answer.text | max_turn_ms
+    intro --> asking: tts.played de la intro / timeout / tts_delivery=none
+    asking --> listening: tts.played / timeout (§5.14) / tts_delivery=none / sin TTS
+    listening --> processing: audio.end | endpoint por silencio | answer.text | max_turn_ms
     processing --> asking: turn.end{next=followup} / followup (≤2)
     processing --> asking: turn.end{next=question} / question
     processing --> asking: turn.end{next=repeat} (NO_AUDIO)
@@ -835,6 +836,33 @@ export type ClientMessage = Hello | AudioChunkJson | AudioEnd | AnswerText | Con
 
 ---
 
+### 5.14 `tts.played`: cuándo espera el servidor (v1.2)
+
+El servidor pasa a escuchar recién cuando el usuario terminó de oír la intervención, para no grabar el TTS como respuesta.
+
+| `tts_delivery` | Intervención | El servidor… |
+|---|---|---|
+| `binary` / `url` | `intro`, `question` (`main`/`repeat`), `followup` | **espera** `tts.played` de ese `utterance_id` antes de pasar a `listening` (o, para la intro, antes de mandar la primera pregunta) |
+| `binary` / `url` | cierre (`question{kind:"closing"}`) | **no** espera: manda `tts.audio`/`tts.url`, después `session.end` y cierra. El cliente no necesita mandar `tts.played` del cierre (si lo manda, se ignora) |
+| `none` | todas | **no** espera nada y avanza enseguida (pasa a `listening` al mandar la pregunta). El cliente no manda `tts.played` |
+
+- **Timeout (no es error):** si `tts.played` no llega dentro de `duration_ms` del audio + `CX9_TTS_PLAYED_GRACE_MS` (default **3000**), o de `CX9_TTS_PLAYED_TIMEOUT_MS` (default **20000**) si la duración no se conoce (`duration_ms` ausente o 0), el servidor avanza igual, como si hubiera llegado. No manda `error`: deja un log `warn` (`tts.played no llegó a tiempo`) y suma `cx9_tts_played_timeouts_total`. Un `tts.played` que llega después se ignora.
+- **Una vez por `utterance_id`.** El cliente lo manda una sola vez, al terminar de reproducir (o al saltear el audio). Duplicados y `tts.played` de intervenciones viejas (`utterance_id` menor o igual al último confirmado) se ignoran sin error. Los `utterance_id` crecen siempre (`u-1`, `u-2`, …; una repetición tiene uno nuevo).
+- Si el TTS falla (`error TTS_UNAVAILABLE`) o el servidor manda la intervención solo como texto por backpressure, no hay audio y avanza sin esperar.
+- Mientras espera (`intro`/`asking`), el audio del usuario se rechaza con `STATE_CONFLICT` no fatal.
+
+### 5.15 Endpointing por silencio (v1.2)
+
+El servidor puede cerrar el turno solo cuando el usuario deja de hablar, sin `audio.end`. **Solo analiza el audio del micrófono del usuario** que manda el cliente durante su propio turno (`listening`); no hay captura de otra fuente ni de otra persona.
+
+- **Activación:** por defecto activo (`CX9_ENDPOINT_MODE=auto`). El cliente lo apaga para su conexión con `hello.endpointing: false`. `session.ready.endpointing = {enabled, mode, silence_ms}` dice lo efectivo. En sesiones `input: text` no aplica. `audio.end` sigue valiendo siempre como cierre explícito.
+- **Regla:** se cierra cuando hubo voz en el turno y el silencio final llega a `CX9_ENDPOINT_SILENCE_MS` (default **700 ms**) de audio. Antes de cerrar hay una **ventana de gracia** de `CX9_ENDPOINT_GRACE_MS` (default 200 ms): si la voz vuelve en ese lapso, el cierre se cancela y el turno sigue.
+- **Fuentes (`mode`):** `stt` usa los campos opcionales de `/stt?partial=true` (`speech_ended_ms` relativo al inicio del audio mandado y `trailing_silence_ms`, §6.1). `energy` usa un VAD de energía RMS del backend sobre frames de 20 ms (`CX9_ENDPOINT_RMS`, default 500 sobre 32767; voz mínima `CX9_ENDPOINT_MIN_VOICE_MS`, default 150). `auto` usa `stt` mientras el servicio mande los campos y cae a `energy` si no los manda o si el parcial falla/está ocupado. `off` no cierra nunca por silencio.
+- **Parciales:** siguen siendo los últimos 12 s cada ~1,5 s. Con endpointing `stt`/`auto` el servidor pide parciales aunque `hello.partials` sea `false` (no se mandan `transcript.partial` al cliente) y, cuando la energía ve un silencio candidato, pide **uno extra en el momento** para confirmarlo sin esperar al próximo tick.
+- **Al cerrar:** `turn.end.reason = "endpoint"`; el `/stt` final (turno completo) y la decisión del LLM se lanzan en el acto. Los chunks que lleguen tarde para ese turno se descartan sin error.
+- **Decisión especulativa** (`CX9_SPECULATIVE_FOLLOWUP`, default `true`): al cerrar por endpoint, si el último parcial cubre el turno entero hasta el fin de voz, el backend consulta al LLM con ese parcial **mientras** corre el STT final. Si el texto final se parece ≥ 0,9 (palabras normalizadas) al parcial, usa esa decisión; si no, la descarta y consulta con el final. El texto que se guarda y se puntúa es siempre el final. Métrica `cx9_speculative_followups_total{result=hit|discarded|error}`.
+- **Métricas de latencia:** `cx9_endpoint_to_followup_tts_seconds{mode=endpoint|explicit, provider}` mide desde el fin de voz detectado (o la llegada de `audio.end`) hasta el primer frame/`tts.url` de la intervención siguiente; `cx9_turn_stage_seconds{stage=stt_final|llm_followup|tts_first_byte}` mide cada etapa. `cx9_endpoints_total{source=stt|energy}` cuenta los cierres.
+
 ## 6. Contrato HTTP backend → servicio de voz (`/speech`)
 
 - Base URL: `CX9_SPEECH_URL` (`http://speech:8090` en compose; por defecto del backend `http://127.0.0.1:8090` sin Docker). **Solo red interna**; el navegador nunca lo llama.
@@ -885,6 +913,7 @@ Respuesta `200 application/json`:
   - `segments[].words[].is_filler` (bool): la palabra es muletilla.
   - `fillers`: `[{ "text": "eh", "start_s": 0.0, "end_s": 0.3 }]` y `filler_count` (entero).
   - `pauses`: `[{ "start_s": 2.1, "end_s": 3.0, "duration_s": 0.9 }]`, huecos largos entre palabras.
+  - `speech_ended_ms` (número, ms) y `trailing_silence_ms` (número, ms), sobre todo en `partial=true`: fin de la última voz **relativo al inicio del audio mandado** y silencio al final de ese audio, según el VAD del servicio. `speech_ended_ms` se omite (o es `null`) si no hubo voz. Los usa el endpointing (§5.15); si faltan, el backend usa su VAD de energía.
   - El backend usa `fillers` para la dimensión `muletillas` (`details.muletillas_fuente = "stt"`, también si la lista viene vacía: cero muletillas según el STT; `Turn.stt_fillers` queda `[]`, y solo se omite si la extensión no vino) y `pauses` para `details.pausas` y `Turn.pauses` (`{cantidad, total_s, mas_larga_s}`; `null` si no vienen).
 
 ### 6.2 `POST /tts`
@@ -966,6 +995,7 @@ Se activa con `CX9_SPEECH_MODE=mock` al arrancar el servicio (`/health` devuelve
 - `duration_s = bytes / 32000` para L16 16 kHz (o la del header WAV), redondeado a 3 decimales.
 - Un único segmento `[0, duration_s]`; palabras = `text` separado por espacios, con tiempos repartidos uniformemente y `confidence = 0.9`, salvo palabras que empiezan con `?` (p. ej. `?Telecom`), que van con `0.3` y sin el `?` (para probar `low_confidence`). El `?` **puede quedar en `text`**: los tests no deben depender de que se quite.
 - `confidence` = promedio; `engine: "mock"`, `model: "mock"`, `processing_ms: 0`.
+- Con `partial=true` suma `speech_ended_ms`/`trailing_silence_ms` con un VAD de energía determinista (frames de 20 ms con RMS ≥ 500 son voz). `X-Mock-VAD: off` los omite (servicio sin VAD); `X-Mock-Speech-Ended-Ms` y `X-Mock-Trailing-Silence-Ms` los fijan.
 - Audio vacío o < 100 ms → `422 NO_AUDIO` (igual que real). Header `X-Mock-Fail: 503|504|timeout` fuerza el error para probar reintentos y breaker (`timeout` = no responde hasta que corte el cliente).
 
 `POST /tts` mock:
@@ -980,6 +1010,7 @@ El backend tiene su **propio fake** en Go que implementa este mismo contrato en 
 
 ## 7. Datos y privacidad (lo que el contrato fija)
 
+- Solo se captura el audio del **micrófono del usuario** durante su turno de respuesta; el endpointing (§5.15) analiza ese mismo audio y nada más.
 - El audio de las respuestas no se guarda salvo `save_audio: true` (equivale a `--guardar-audio`). Si se guarda, queda en el volumen local y se borra con la sesión.
 - Ningún mensaje, log ni métrica incluye claves de API. Los logs estructurados (JSON) no incluyen el texto de las respuestas salvo con `CX9_LOG_TRANSCRIPTS=1` (dev).
 - Con `ollama`/`mock` y el servicio de voz local, nada sale de la máquina. Con `openai`/`anthropic`/`xai`, sale el **texto** de las respuestas (no el audio) hacia ese proveedor; la UI lo avisa usando `LlmProvider.local`.
@@ -1003,4 +1034,5 @@ El backend tiene su **propio fake** en Go que implementa este mismo contrato en 
 
 - Servicio de voz: `/stt` suma las extensiones opcionales `fillers`, `filler_count`, `pauses` y `words[].is_filler` (§6.1); `/tts` solo `wav`/`pcm16le` y `422` para `opus` (§6.2); un parcial ocupado da `503` inmediato y el backend lo saltea (§6.5); `degraded` en `/health` es usable (§6.3, §4.1); `401 UNAUTHENTICATED` (§6.6); el `?` del mock puede quedar en `text` (§6.7). Los parciales mandan los últimos 12 s; el final, el turno completo.
 - WS: `hello` y el nuevo `ack` van con `seq: 0` fuera de la secuencia; el dedupe descarta solo `seq <= last_client_seq` y nada se renumera; `session.ready` puede llegar antes que los reenvíos (§5.2). Acks periódicos cada 250 ms o 32 KB en `listening` (§5.8). `opus` sale de los formatos de TTS. `probe` suma `other`. Con `tts_delivery=none` no hay `tts.played`. `control.repeat` re-emite con `repeat: true`, mismo `turn_id`/`question_id`, sin `turn.end` y sin consumir repregunta (§5.5). Intro `index: 0` y cierre `index: total` con `turn_id "t-0"`.
+- **v1.2:** endpointing por silencio (§5.15): `hello.endpointing`, `session.ready.endpointing`, `turn.end.reason = "endpoint"`, campos opcionales `speech_ended_ms`/`trailing_silence_ms` de `/stt` (§6.1) y en el mock (§6.7), métricas de latencia por etapa. Reglas explícitas de `tts.played` (§5.14): espera para intro/pregunta/repregunta con `binary`/`url`, sin espera con `none` ni para el cierre, timeout `duration_ms + CX9_TTS_PLAYED_GRACE_MS` (o `CX9_TTS_PLAYED_TIMEOUT_MS`) sin error, una vez por `utterance_id` y duplicados ignorados.
 - REST: `live-ticket` es opcional (§5.1). §2.5 deja escrita la regla de `Origin` igual a `Host` con puerto y que un proxy tiene que pasar el `Host` original (`$http_host` en nginx). Campos opcionales nuevos: `Turn.stt_fillers`, `Turn.pauses`, `details.pausas`, `details.muletillas_fuente`. `/metrics` en el mismo puerto que la API.
