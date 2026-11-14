@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Servicio de voz sin Docker: venv propio en speech/.venv (ignorado por git), escucha en 127.0.0.1.
+# shellcheck source=common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 load_env
 need python3 "instalá Python 3.10+"
 
-cd "$ROOT/speech"
+cd "$ROOT/speech" || exit 1
 VENV="${SPEECH_VENV:-$ROOT/speech/.venv}"
 if [[ ! -x "$VENV/bin/python" ]]; then
     python3 -m venv "$VENV"

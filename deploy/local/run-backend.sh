@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Backend (Go) sin Docker, escuchando en 127.0.0.1. Comando configurable con CX9_BACKEND_CMD.
+# shellcheck source=common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 load_env
 need go "instalá Go (ver backend/go.mod)"
 
-cd "$ROOT/backend"
+cd "$ROOT/backend" || exit 1
 if [[ -n "${CX9_BACKEND_CMD:-}" ]]; then
     exec bash -c "$CX9_BACKEND_CMD"
 fi

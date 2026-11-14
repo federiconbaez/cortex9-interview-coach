@@ -4,6 +4,7 @@
 # y solo baja archivos: no envía audio, texto ni datos tuyos.
 #
 #   deploy/local/fetch-models.sh [tiny|base|small]   # por defecto: small
+# shellcheck source=common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 need curl "instalá curl"
 

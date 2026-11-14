@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Levanta speech, backend y frontend sin Docker. Ctrl+C los detiene a todos.
 # Postgres: usá uno local (pg_isready) o CX9_SKIP_DB=1. Prometheus/Grafana solo vienen en el modo Docker.
+# shellcheck source=common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 load_env
 

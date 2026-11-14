@@ -1,0 +1,199 @@
+# CI sin secretos: tests, lint, build de imágenes (sin push) y e2e con mocks.
+# Cada componente se protege con un chequeo de existencia, así el workflow
+# funciona aunque /backend o /frontend todavía no estén.
+# Acciones fijadas por SHA (tags con runtime node24).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RUFF_VERSION: "0.17.5"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: ruff
+        run: |
+          pip install "ruff==${RUFF_VERSION}"
+          if [ -d speech ]; then
+            ruff check speech
+            ruff format --check speech
+          fi
+      - name: shellcheck (deploy/local)
+        if: hashFiles('deploy/local/*.sh') != ''
+        run: shellcheck -x -P SCRIPTDIR deploy/local/*.sh
+      - name: docker compose config
+        if: hashFiles('deploy/docker-compose.yml') != ''
+        run: |
+          mkdir -p models
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env.example config -q
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.debug.yml --env-file deploy/.env.example config -q
+      - name: puertos solo en 127.0.0.1
+        if: hashFiles('deploy/docker-compose.yml') != ''
+        run: |
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env.example config --format json \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); bad=[(s,p.get("host_ip")) for s,c in d["services"].items() for p in c.get("ports",[]) if p.get("host_ip")!="127.0.0.1"]; print(bad or "ok"); sys.exit(1 if bad else 0)'
+
+  speech:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: hashFiles('speech/pyproject.toml') != ''
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: speech/requirements*.txt
+      - name: tests (offline, mocks)
+        if: hashFiles('speech/pyproject.toml') != ''
+        working-directory: speech
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
+          pytest -q
+
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: hashFiles('backend/go.mod') != ''
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: vet + tests
+        if: hashFiles('backend/go.mod') != ''
+        working-directory: backend
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: sin backend todavía
+        if: hashFiles('backend/go.mod') == ''
+        run: echo "backend/ no existe; se omite."
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: hashFiles('frontend/package-lock.json') != ''
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: lint + typecheck + tests
+        if: hashFiles('frontend/package-lock.json') != ''
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint --if-present
+          npm run typecheck --if-present
+          npm test --if-present
+      - name: sin frontend todavía
+        if: hashFiles('frontend/package-lock.json') == ''
+        run: echo "frontend/ no existe; se omite."
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: speech
+        if: hashFiles('speech/Dockerfile') != ''
+        run: docker build --pull -t cortex9/speech:ci speech
+      - name: backend
+        if: hashFiles('backend/Dockerfile') != ''
+        run: docker build --pull -t cortex9/backend:ci backend
+      - name: frontend
+        if: hashFiles('frontend/package-lock.json') != '' && hashFiles('deploy/frontend/Dockerfile') != ''
+        run: >
+          docker build --pull -t cortex9/frontend:ci
+          -f deploy/frontend/Dockerfile --build-context deploy=deploy/frontend frontend
+      - name: imagen de speech no trae modelos
+        if: hashFiles('speech/Dockerfile') != ''
+        run: |
+          docker run --rm --entrypoint sh cortex9/speech:ci -c \
+            'test -z "$(find / -xdev \( -name "*.onnx" -o -name "model.bin" \) -not -path "*/site-packages/*" 2>/dev/null)"'
+
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [speech]
+    env:
+      CX9_SPEECH_MODE: mock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: speech en modo mock (proceso local)
+        if: hashFiles('speech/pyproject.toml') != ''
+        working-directory: speech
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
+          SPEECH_PORT=8090 python -m coach_speech > /tmp/speech.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8090/health && break; sleep 1; done
+          SPEECH_URL=http://127.0.0.1:8090 pytest -q e2e
+      - name: frontend e2e (Playwright contra su mock-server)
+        if: hashFiles('frontend/playwright.config.*') != ''
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - name: stack completo con docker compose (mocks)
+        if: hashFiles('backend/Dockerfile') != '' && hashFiles('frontend/package-lock.json') != ''
+        run: |
+          mkdir -p models
+          cp deploy/.env.example deploy/.env
+          sed -i 's/^CX9_SPEECH_MODE=.*/CX9_SPEECH_MODE=mock/; s/^SPEECH_WITH_MODELS=.*/SPEECH_WITH_MODELS=false/; s/^CX9_LLM_PROVIDER=.*/CX9_LLM_PROVIDER=mock/' deploy/.env
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build --wait --wait-timeout 180
+          curl -fsS http://127.0.0.1:5173/v1/health
+          curl -fsS http://127.0.0.1:8080/v1/ready
+      - name: logs si falla
+        if: failure()
+        run: |
+          cat /tmp/speech.log 2>/dev/null || true
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color 2>/dev/null | tail -200 || true
+      - name: apagar
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env down -v 2>/dev/null || true
