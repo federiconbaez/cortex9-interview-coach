@@ -28,7 +28,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Readiness (base de datos, servicio de voz, proveedor LLM por defecto) */
+        /**
+         * Readiness (base de datos, servicio de voz, proveedor LLM por defecto)
+         * @description `status` es `ok`, `degraded` o `down`. Si el servicio de voz responde `/health` con
+         *     `degraded` (por ejemplo, TTS de respaldo), la dependencia es usable: se informa como
+         *     `checks.speech.status = degraded`, el global queda `degraded` y la respuesta es 200.
+         *     Solo `down` en la base o en el servicio de voz devuelve 503.
+         */
         get: operations["getReady"];
         put?: never;
         post?: never;
@@ -47,7 +53,7 @@ export interface paths {
         };
         /**
          * Métricas Prometheus (formato de exposición de texto). Sin versionar.
-         * @description Solo escucha en 127.0.0.1 o en la red interna de docker-compose. Sin auth.
+         * @description Mismo puerto que la API (:8080). El despliegue solo lo publica en 127.0.0.1 o en la red interna de docker-compose y el proxy del frontend no lo reenvía. Sin auth.
          */
         get: operations["getMetrics"];
         put?: never;
@@ -312,7 +318,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ticket de un solo uso (60 s) para abrir el WebSocket sin cookie */
+        /**
+         * Ticket de un solo uso (60 s) para abrir el WebSocket sin cookie (opcional)
+         * @description Opcional. Un cliente del mismo origen abre el WebSocket directamente con la cookie
+         *     `cx9_session`; el ticket solo hace falta para clientes que no pueden mandar la cookie
+         *     (otro origen en desarrollo, herramientas). El ticket vale 60 s y se consume al usarlo.
+         */
         post: operations["createLiveTicket"];
         delete?: never;
         options?: never;
@@ -459,8 +470,11 @@ export interface components {
             /** @description Escenarios con texto en este idioma */
             scenarios: number;
         };
-        /** @enum {string} */
-        Probe: "numbers" | "example" | "why" | "ownership" | "result";
+        /**
+         * @description `other` solo aparece en repreguntas generadas (WS y turnos); los escenarios no lo aceptan en `probes`.
+         * @enum {string}
+         */
+        Probe: "numbers" | "example" | "why" | "ownership" | "result" | "other";
         ScenarioQuestion: {
             id: components["schemas"]["Slug"];
             text: components["schemas"]["I18nText"];
@@ -655,7 +669,16 @@ export interface components {
             duration_estimated?: boolean;
             low_confidence?: string[];
             skipped?: boolean;
+            /** @description Opcional: muletillas que marcó el STT (extensión de /stt) */
+            stt_fillers?: string[];
+            pauses?: components["schemas"]["PauseStats"];
         };
+        /** @description Pausas largas de la respuesta según el STT; null o ausente si el servicio de voz no las informa */
+        PauseStats: {
+            cantidad: number;
+            total_s: number;
+            mas_larga_s: number;
+        } | null;
         SessionDetail: components["schemas"]["Session"] & {
             turns: components["schemas"]["Turn"][];
             llm_errors?: string[];
@@ -714,6 +737,12 @@ export interface components {
                 muletillas: string[];
                 muletillas_cada_100: number;
                 numeros: string[];
+                /**
+                 * @description Opcional: stt si las muletillas vienen del servicio de voz, texto si se detectaron en la transcripción
+                 * @enum {string}
+                 */
+                muletillas_fuente?: "stt" | "texto";
+                pausas?: components["schemas"]["PauseStats"];
                 star: {
                     S: boolean;
                     T: boolean;
@@ -783,7 +812,7 @@ export interface components {
             /** @constant */
             v: 1;
             type: string;
-            /** @description Monótono por dirección, sin huecos; binarios incluidos */
+            /** @description Monótono por dirección desde 1, sin huecos; binarios incluidos. `hello` (cliente) y `ack` (servidor) llevan siempre 0 y quedan fuera de la secuencia. Un reenvío conserva su seq original; nunca se renumera. */
             seq: number;
             /** Format: date-time */
             ts: string;
@@ -809,7 +838,7 @@ export interface components {
              */
             frame_ms: 20 | 40 | 60 | 100;
         };
-        /** @description cliente→servidor, primer mensaje obligatorio (≤5 s) */
+        /** @description cliente→servidor, primer mensaje obligatorio (≤5 s). Siempre `seq: 0`: exento de la secuencia y del dedupe. */
         WsHello: components["schemas"]["WsEnvelope"] & {
             /** @constant */
             type?: "hello";
@@ -817,7 +846,7 @@ export interface components {
                 client: string;
                 audio_formats: components["schemas"]["AudioFormat"][];
                 tts_delivery: ("binary" | "url" | "none")[];
-                tts_formats?: ("pcm16le" | "wav" | "opus")[];
+                tts_formats?: ("pcm16le" | "wav")[];
                 /** @default true */
                 partials: boolean;
                 resume?: {
@@ -825,7 +854,7 @@ export interface components {
                 } | null;
             };
         };
-        /** @description servidor→cliente, respuesta a hello */
+        /** @description servidor→cliente, respuesta a hello. Lleva un seq nuevo y puede llegar ANTES de los reenvíos de una reanudación; el cliente ordena y deduplica por seq. */
         WsSessionReady: components["schemas"]["WsEnvelope"] & {
             /** @constant */
             type?: "session.ready";
@@ -835,7 +864,7 @@ export interface components {
                 /** @enum {string} */
                 tts_delivery: "binary" | "url" | "none";
                 /** @enum {string} */
-                tts_format?: "pcm16le" | "wav" | "opus";
+                tts_format?: "pcm16le" | "wav";
                 /** @constant */
                 heartbeat_ms: 15000;
                 /** @constant */
@@ -856,6 +885,7 @@ export interface components {
             data?: {
                 turn_id: string;
                 question_id: string;
+                /** @description 1-based para preguntas; kind=intro usa 0 y turn_id t-0 (no espera respuesta); kind=closing usa total y turn_id t-0 */
                 index: number;
                 total: number;
                 text: string;
@@ -866,6 +896,11 @@ export interface components {
                  * @enum {string}
                  */
                 kind: "intro" | "main" | "closing" | "repeat";
+                /**
+                 * @description true si es una re-emisión. Por control.repeat: mismo turn_id y question_id, seq nuevo, sin turn.end. Tras NO_AUDIO o falla de STT: turn.end next=repeat y luego la misma pregunta con turn_id nuevo.
+                 * @default false
+                 */
+                repeat: boolean;
             };
         };
         WsFollowup: components["schemas"]["WsEnvelope"] & {
@@ -876,10 +911,14 @@ export interface components {
                 question_id: string;
                 followup_index: number;
                 max_followups: number;
-                /** @enum {string} */
-                probe: "numbers" | "example" | "why" | "ownership" | "result" | "other";
+                probe: components["schemas"]["Probe"];
                 text: string;
                 utterance_id: string;
+                /**
+                 * @description true si es una re-emisión (mismas reglas que en question). Nunca consume repregunta: followup_index no cambia.
+                 * @default false
+                 */
+                repeat: boolean;
             };
         };
         /** @description Anuncia audio TTS; si delivery=binary, siguen frames binarios kind=0x02 */
@@ -889,7 +928,7 @@ export interface components {
             data?: {
                 utterance_id: string;
                 /** @enum {string} */
-                format: "pcm16le" | "wav" | "opus";
+                format: "pcm16le" | "wav";
                 sample_rate: number;
                 duration_ms: number;
                 chunks: number;
@@ -904,7 +943,7 @@ export interface components {
                 utterance_id: string;
                 url: string;
                 /** @enum {string} */
-                format: "wav" | "opus";
+                format: "wav";
                 duration_ms: number;
                 /** Format: date-time */
                 expires_at: string;
@@ -1052,8 +1091,18 @@ export interface components {
                 utterance_id: string;
             };
         };
+        /** @description servidor→cliente, ack periódico mientras el estado es listening: cada 250 ms o cada 32 KB recibidos (lo que pase primero), aunque partials esté apagado. Siempre `seq: 0`; no entra en el replay. `ack` = `data.last_client_seq`. */
+        WsAck: components["schemas"]["WsEnvelope"] & {
+            /** @constant */
+            type?: "ack";
+            /** @constant */
+            seq?: 0;
+            data?: {
+                last_client_seq: number;
+            };
+        };
         WsClientMessage: components["schemas"]["WsHello"] | components["schemas"]["WsAudioChunkJson"] | components["schemas"]["WsAudioEnd"] | components["schemas"]["WsAnswerText"] | components["schemas"]["WsControl"] | components["schemas"]["WsTtsPlayed"] | components["schemas"]["WsPing"] | components["schemas"]["WsPong"];
-        WsServerMessage: components["schemas"]["WsSessionReady"] | components["schemas"]["WsQuestion"] | components["schemas"]["WsFollowup"] | components["schemas"]["WsTtsAudio"] | components["schemas"]["WsTtsUrl"] | components["schemas"]["WsTranscriptPartial"] | components["schemas"]["WsTranscriptFinal"] | components["schemas"]["WsPause"] | components["schemas"]["WsResume"] | components["schemas"]["WsTurnEnd"] | components["schemas"]["WsSessionEnd"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPong"];
+        WsServerMessage: components["schemas"]["WsSessionReady"] | components["schemas"]["WsQuestion"] | components["schemas"]["WsFollowup"] | components["schemas"]["WsTtsAudio"] | components["schemas"]["WsTtsUrl"] | components["schemas"]["WsTranscriptPartial"] | components["schemas"]["WsTranscriptFinal"] | components["schemas"]["WsPause"] | components["schemas"]["WsResume"] | components["schemas"]["WsTurnEnd"] | components["schemas"]["WsSessionEnd"] | components["schemas"]["WsError"] | components["schemas"]["WsAck"] | components["schemas"]["WsPing"] | components["schemas"]["WsPong"];
     };
     responses: {
         /** @description Petición mal formada */
@@ -1916,7 +1965,6 @@ export interface operations {
                 };
                 content: {
                     "audio/wav": string;
-                    "audio/ogg": string;
                 };
             };
             401: components["responses"]["Unauthorized"];

@@ -57,7 +57,8 @@ export class TtsAssembler {
     }
     this.parts = [];
     if (meta.format === 'pcm16le') return { raw: joined, bytes: wavFromPcm16(joined, meta.sample_rate), mime: 'audio/wav', meta };
-    return { raw: joined, bytes: joined, mime: meta.format === 'opus' ? 'audio/ogg; codecs=opus' : 'audio/wav', meta };
+    // v1.1: el TTS es solo wav o pcm16le (opus ya no existe para TTS).
+    return { raw: joined, bytes: joined, mime: 'audio/wav', meta };
   }
 }
 

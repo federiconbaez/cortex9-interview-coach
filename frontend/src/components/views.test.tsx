@@ -77,6 +77,34 @@ describe('ReportView', () => {
     expect(screen.getAllByTestId('improved')[0]).toHaveTextContent('Telecom');
     expect(screen.getByText(es['report.disclaimer'])).toBeInTheDocument();
   });
+  it('v1.1: muestra muletillas con su fuente y pausas largas cuando vienen', async () => {
+    const base = fx.report;
+    const block = base.blocks[0];
+    if (!block) throw new Error('fixture sin bloques');
+    const t0 = block.turns[0];
+    if (!t0) throw new Error('fixture sin turnos');
+    const report = {
+      ...base,
+      blocks: [
+        {
+          ...block,
+          turns: [
+            { ...t0, turn_id: 't-1', details: { ...t0.details, muletillas: ['eh', 'este'], muletillas_cada_100: 12.5, muletillas_fuente: 'stt' as const, pausas: { cantidad: 2, total_s: 3.5, mas_larga_s: 2 } } },
+            { ...t0, turn_id: 't-2', details: { ...t0.details, muletillas: [], muletillas_fuente: 'texto' as const, pausas: { cantidad: 0, total_s: 0, mas_larga_s: 0 } } },
+            { ...t0, turn_id: 't-3', details: { ...t0.details, muletillas: [], pausas: null } },
+          ],
+        },
+      ],
+    };
+    renderUi(<ReportView sessionId="s" onBack={vi.fn()} />, fakeApi({ report: vi.fn(async () => ({ status: 'ready' as const, report })) }));
+    const items = await screen.findAllByTestId('turn-speech');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent('Muletillas: eh, este (12,5 cada 100 palabras) (detectadas por el reconocimiento de voz)');
+    expect(items[0]).toHaveTextContent('Pausas largas: 2 (en total 3,5 s; la más larga, 2 s)');
+    expect(items[1]).toHaveTextContent(`${es['report.fillersNone']} (${es['report.fillersSource.texto']})`);
+    expect(items[1]).toHaveTextContent(es['report.pausesNone']);
+  });
+
   it('409 SESSION_NOT_ENDED, sesión fallida y error con reintento', async () => {
     const a1 = fakeApi({ report: vi.fn(async () => Promise.reject(new ApiError(409, 'SESSION_NOT_ENDED', 'x'))) });
     const r1 = renderUi(<ReportView sessionId="s" onBack={vi.fn()} />, a1);

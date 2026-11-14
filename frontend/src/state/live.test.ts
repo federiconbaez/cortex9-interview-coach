@@ -72,4 +72,31 @@ describe('liveReducer', () => {
     s = liveReducer(s, { type: 'conn', state: 'open', attempt: 0 });
     expect(s).toMatchObject({ conn: 'open', closeCode: 4001, connError: null, nextDelayMs: null });
   });
+  it('v1.1: intro index 0 y cierre index total con t-0 no cambian el progreso ni se responden', () => {
+    let s = run(open, m('session.ready', { state: 'ready', question_count: 2, question_index: 0, tts_delivery: 'binary' }));
+    s = liveReducer(s, q({ turn_id: 't-0', question_id: 'intro', index: 0, kind: 'intro', utterance_id: 'u-1' }));
+    expect(s.lastIndex).toBe(0);
+    expect(canAnswer(s)).toBe(false);
+    s = liveReducer(s, q({ index: 1, utterance_id: 'u-2' }));
+    expect(s.lastIndex).toBe(1);
+    s = liveReducer(s, q({ turn_id: 't-0', question_id: 'closing', index: 2, total: 2, kind: 'closing', utterance_id: 'u-9' }));
+    expect(s.lastIndex).toBe(1);
+    expect(canAnswer(s)).toBe(false);
+  });
+  it('v1.1: repeat=true marca la re-emisión (pregunta y repregunta) sin duplicar el turno', () => {
+    let s = run(open, q());
+    s = liveReducer(s, q({ utterance_id: 'u-2', kind: 'repeat', repeat: true }));
+    expect(s.turn).toMatchObject({ turnId: 't-1', kind: 'repeat', repeat: true, index: 1 });
+    expect(s.transcript).toHaveLength(2);
+    expect(canAnswer(s)).toBe(true);
+    s = liveReducer(s, m('followup', { turn_id: 't-2', question_id: 'q1', followup_index: 1, max_followups: 2, probe: 'other', text: 'x', lang: 'es', utterance_id: 'u-3', repeat: true }));
+    expect(s.turn).toMatchObject({ kind: 'followup', repeat: true, probe: 'other', followupIndex: 1 });
+    expect(run(open, q({ repeat: true, kind: undefined })).turn?.kind).toBe('repeat');
+    expect(run(open, q()).turn?.repeat).toBe(false);
+  });
+  it('guarda tts_delivery de session.ready y el ack no cambia el estado', () => {
+    const s = run(m('session.ready', { state: 'ready', tts_delivery: 'url' }));
+    expect(s.ttsDelivery).toBe('url');
+    expect(liveReducer(s, m('ack', { last_client_seq: 3 }))).toBe(s);
+  });
 });

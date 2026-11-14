@@ -81,6 +81,39 @@ export interface ApiClient {
   resolve(path: string): string;
 }
 
+/**
+ * Envuelve el cliente: si cualquier llamada (salvo `login`, donde 401 es "contraseña incorrecta")
+ * responde 401 `UNAUTHENTICATED`, avisa para volver al login (§2.6; p. ej. la cookie venció).
+ */
+export function withUnauthorizedHandler(api: ApiClient, onUnauthorized: () => void): ApiClient {
+  const guard =
+    <A extends unknown[], R>(f: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      try {
+        return await f(...a);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401 && e.code === 'UNAUTHENTICATED') onUnauthorized();
+        throw e;
+      }
+    };
+  return {
+    ...api,
+    logout: guard(api.logout),
+    me: guard(api.me),
+    languages: guard(api.languages),
+    scenarios: guard(api.scenarios),
+    providers: guard(api.providers),
+    createSession: guard(api.createSession),
+    listSessions: guard(api.listSessions),
+    endSession: guard(api.endSession),
+    report: guard(api.report),
+    getProfile: guard(api.getProfile),
+    putProfile: guard(api.putProfile),
+    deleteProfile: guard(api.deleteProfile),
+    gaps: guard(api.gaps),
+  };
+}
+
 const isProblem = (v: unknown): v is Problem =>
   typeof v === 'object' && v !== null && typeof (v as { code?: unknown }).code === 'string';
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, createApiClient, type ApiClient } from './api/client';
+import { ApiError, createApiClient, withUnauthorizedHandler, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
 import { LANGS, type CaptureMode, type InputMode, type Lang } from './api/schema';
 import { HistoryView } from './components/HistoryView';
@@ -51,20 +51,23 @@ export function App({ client, liveDeps }: { client?: ApiClient; liveDeps?: LiveD
     document.documentElement.lang = lang;
   }, [lang]);
   return (
-    <ApiProvider client={api}>
-      <I18nProvider lang={lang} setLang={setLang}>
-        <Shell api={api} deps={deps} />
-      </I18nProvider>
-    </ApiProvider>
+    <I18nProvider lang={lang} setLang={setLang}>
+      <Shell rawApi={api} deps={deps} />
+    </I18nProvider>
   );
 }
 
-type Auth = { s: 'checking' } | { s: 'in' } | { s: 'out' } | { s: 'error'; message: string };
+type Auth = { s: 'checking' } | { s: 'in' } | { s: 'out'; expired?: boolean } | { s: 'error'; message: string };
 
-function Shell({ api, deps }: { api: ApiClient; deps: LiveDeps }) {
+function Shell({ rawApi, deps }: { rawApi: ApiClient; deps: LiveDeps }) {
   const { t, lang, setLang } = useI18n();
   const [view, setView] = useState<View>({ name: 'practice' });
   const [auth, setAuth] = useState<Auth>({ s: 'checking' });
+  // 401 UNAUTHENTICATED en cualquier llamada (cookie vencida o revocada) → vuelve al login.
+  const api = useMemo(
+    () => withUnauthorizedHandler(rawApi, () => setAuth((a) => (a.s === 'in' ? { s: 'out', expired: true } : a))),
+    [rawApi],
+  );
   const mainRef = useRef<HTMLElement>(null);
   const firstRender = useRef(true);
 
@@ -105,7 +108,7 @@ function Shell({ api, deps }: { api: ApiClient; deps: LiveDeps }) {
   const current = view.name === 'live' ? 'practice' : view.name === 'report' ? 'history' : view.name;
 
   return (
-    <>
+    <ApiProvider client={api}>
       <a href="#main" className="skip">
         {t('app.skip')}
       </a>
@@ -158,7 +161,7 @@ function Shell({ api, deps }: { api: ApiClient; deps: LiveDeps }) {
             </button>
           </div>
         )}
-        {auth.s === 'out' && <Login onDone={check} />}
+        {auth.s === 'out' && <Login onDone={check} expired={auth.expired === true} />}
         {auth.s === 'in' && (
           <>
             {view.name === 'practice' && <SetupForm onStart={start} />}
@@ -179,6 +182,6 @@ function Shell({ api, deps }: { api: ApiClient; deps: LiveDeps }) {
           </>
         )}
       </main>
-    </>
+    </ApiProvider>
   );
 }

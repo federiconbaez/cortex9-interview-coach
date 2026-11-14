@@ -26,7 +26,7 @@ function setup(opts: { random?: () => number } = {}) {
 function connectReady(t: ReturnType<typeof setup>, over: Record<string, unknown> = {}) {
   t.c.connect();
   t.ws().open();
-  t.ws().recv(srv('session.ready', readyData(over), { ack: 1 }));
+  t.ws().recv(srv('session.ready', readyData(over)));
 }
 
 beforeEach(() => {
@@ -58,7 +58,7 @@ describe('frames binarios (docs/ws-types.ts)', () => {
 });
 
 describe('LiveConnection', () => {
-  it('abre con el subprotocolo y manda hello con PCM16 16 kHz como base', () => {
+  it('abre con el subprotocolo y manda hello con seq 0 (no consume secuencia) y PCM16 16 kHz como base', () => {
     const t = setup();
     t.c.connect();
     expect(t.ws().protocols).toEqual([SUBPROTOCOL]);
@@ -68,9 +68,9 @@ describe('LiveConnection', () => {
     expect(hello).toMatchObject({
       v: 1,
       type: 'hello',
-      seq: 1,
+      seq: 0,
       session_id: 'S',
-      data: { audio_formats: [{ codec: 'pcm16le', sample_rate: 16000, channels: 1 }], tts_delivery: ['binary', 'url'], partials: true, resume: null },
+      data: { audio_formats: [{ codec: 'pcm16le', sample_rate: 16000, channels: 1 }], tts_delivery: ['binary', 'url'], tts_formats: ['wav', 'pcm16le'], partials: true, resume: null },
     });
     expect(t.states.map((x) => x.s)).toEqual(['connecting']);
     t.ws().recv(srv('session.ready', readyData()));
@@ -85,8 +85,8 @@ describe('LiveConnection', () => {
     expect(t.ws().json().map((m) => m.type)).toEqual(['hello']);
     t.ws().recv(srv('session.ready', readyData()));
     expect(t.ws().json().map((m) => [m.type, m.seq])).toEqual([
-      ['hello', 1],
-      ['tts.played', 2],
+      ['hello', 0],
+      ['tts.played', 1],
     ]);
   });
 
@@ -98,7 +98,7 @@ describe('LiveConnection', () => {
     t.c.sendAudio(1, 1, new Uint8Array(3200), true);
     t.c.sendJson('audio.end', { turn_id: 't-1', chunks: 2, bytes: 6400, duration_ms: 200 });
     const seqs = t.ws().sent.map((d) => (typeof d === 'string' ? (JSON.parse(d) as { seq: number }).seq : decodeFrame(d).header.seq));
-    expect(seqs).toEqual([1, 2, 3, 4, 5]);
+    expect(seqs).toEqual([0, 1, 2, 3, 4]);
     const last = decodeFrame(t.ws().sent[3] as ArrayBuffer).header;
     expect(last).toMatchObject({ kind: 1, turnNo: 1, chunkIndex: 1, codec: 1, last: true, payloadLen: 3200 });
   });
@@ -137,26 +137,29 @@ describe('LiveConnection', () => {
     expect(t.ws().json().filter((m) => m.type === 'ping')).toHaveLength(2);
   });
 
-  it('reconecta con backoff y resume: last_server_seq y reenvío de lo no confirmado con su seq original', () => {
+  it('reconecta con backoff y resume: hello seq 0 con last_server_seq y reenvío de lo no confirmado con su seq original', () => {
     const t = setup();
     connectReady(t);
     t.ws().recv(srv('question', { turn_id: 't-1', question_id: 'q', index: 1, total: 2, text: 'Q', lang: 'es', utterance_id: 'u-1', kind: 'main' }));
-    t.c.sendJson('tts.played', { utterance_id: 'u-1' }); // seq 2
-    t.c.sendAudio(1, 0, new Uint8Array(3200), false); // seq 3
+    t.c.sendJson('tts.played', { utterance_id: 'u-1' }); // seq 1
+    t.c.sendAudio(1, 0, new Uint8Array(3200), false); // seq 2
     const first = t.ws();
     first.drop(4008);
     expect(t.states.at(-1)).toMatchObject({ s: 'reconnecting', delay: 500, close: 4008 });
-    t.c.sendAudio(1, 1, new Uint8Array(3200), true); // seq 4, queda en cola
+    t.c.sendAudio(1, 1, new Uint8Array(3200), true); // seq 3, queda en cola
     t.clock.advance(500);
     const second = t.ws();
     expect(second).not.toBe(first);
     second.open();
-    expect(second.json()[0]).toMatchObject({ type: 'hello', seq: 5, data: { resume: { last_server_seq: 2 } } });
-    // El servidor solo recibió hasta seq 2: el cliente reenvía 3 (original) y después 4.
-    second.recv({ ...srv('session.ready', readyData({ resumed: true, last_client_seq: 2 })), seq: 4 });
+    expect(second.json()[0]).toMatchObject({ type: 'hello', seq: 0, data: { resume: { last_server_seq: 2 } } });
+    // El servidor solo procesó hasta seq 1: el cliente reenvía 2 (mismo número) y después 3.
+    second.recv({ ...srv('session.ready', readyData({ resumed: true, last_client_seq: 1 })), seq: 3 });
     const resent = second.sent.slice(1).map((d) => decodeFrame(d as ArrayBuffer).header.seq);
-    expect(resent).toEqual([3, 4]);
+    expect(resent).toEqual([2, 3]);
     expect(t.c.connectionState).toBe('open');
+    // Lo siguiente continúa la secuencia (no se reinicia al reanudar).
+    t.c.sendJson('tts.played', { utterance_id: 'u-2' });
+    expect(second.json().at(-1)).toMatchObject({ type: 'tts.played', seq: 4 });
   });
 
   it('acepta mensajes viejos reenviados DESPUÉS de session.ready y descarta duplicados', () => {
@@ -172,6 +175,71 @@ describe('LiveConnection', () => {
     t.ws().recv({ ...srv('transcript.partial', { turn_id: 't-1', text: 'b', revision: 2, audio_ms: 2 }), seq: 3 });
     expect(t.msgs.map((m) => m.type)).toEqual(['session.ready', 'session.ready', 'transcript.partial', 'transcript.partial']);
     expect(t.c.lastContiguousServerSeq).toBe(4);
+  });
+
+  it('ordena por seq: un mensaje adelantado (no ready) espera al que falta', () => {
+    const t = setup();
+    connectReady(t); // seq 1
+    const p = (seq: number, revision: number) => ({ ...srv('transcript.partial', { turn_id: 't-1', text: String(revision), revision, audio_ms: 1 }), seq });
+    t.ws().recv(p(3, 3));
+    t.ws().recvBin(encodeFrame({ kind: BinKind.TTS_AUDIO, seq: 4, turnNo: 1, chunkIndex: 0, codec: BinCodec.WAV, last: true }, new Uint8Array(2)));
+    expect(t.msgs).toHaveLength(1);
+    expect(t.frames).toEqual([]);
+    t.ws().recv(p(2, 2));
+    expect(t.msgs.slice(1).map((m) => (m as unknown as { data: { revision: number } }).data.revision)).toEqual([2, 3]);
+    expect(t.frames).toEqual([{ turnNo: 1, chunkIndex: 0 }]);
+    expect(t.c.lastContiguousServerSeq).toBe(4);
+  });
+
+  it('si el hueco no se llena en 2 s, procesa lo retenido en orden', () => {
+    const t = setup();
+    connectReady(t);
+    t.ws().recv({ ...srv('transcript.partial', { turn_id: 't-1', text: 'b', revision: 2, audio_ms: 1 }), seq: 5 });
+    t.ws().recv({ ...srv('transcript.partial', { turn_id: 't-1', text: 'a', revision: 1, audio_ms: 1 }), seq: 3 });
+    expect(t.msgs).toHaveLength(1);
+    t.clock.advance(1999);
+    expect(t.msgs).toHaveLength(1);
+    t.clock.advance(1);
+    expect(t.msgs.slice(1).map((m) => (m as unknown as { data: { text: string } }).data.text)).toEqual(['a', 'b']);
+    expect(t.c.lastContiguousServerSeq).toBe(5);
+    expect(t.invalid).toContain('server seq gap after 1');
+  });
+
+  it('mensaje ack (seq 0, §5.8) libera la ventana de 96 KB aunque no haya otros mensajes', () => {
+    const t = setup();
+    connectReady(t); // max_inflight_bytes 96000
+    for (let i = 0; i < 40; i++) t.c.sendAudio(1, i, new Uint8Array(3200), false); // 4 s de audio, seq 1..40
+    const sentAudio = () => t.ws().sent.filter((d) => typeof d !== 'string').length;
+    expect(sentAudio()).toBe(30); // 30 × 3200 = 96000
+    expect(t.c.inflightAudioBytes).toBe(96000);
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', ack: 8, data: { last_client_seq: 8 } });
+    expect(sentAudio()).toBe(38);
+    expect(t.c.inflightAudioBytes).toBe(96000);
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', ack: 38, data: { last_client_seq: 38 } });
+    expect(sentAudio()).toBe(40);
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', ack: 40, data: { last_client_seq: 40 } });
+    expect(t.c.inflightAudioBytes).toBe(0);
+    // el ack no entra en la secuencia ni llega a la UI
+    expect(t.c.lastContiguousServerSeq).toBe(1);
+    expect(t.msgs.map((m) => m.type)).toEqual(['session.ready']);
+  });
+
+  it('ack con seq distinto de 0 o sin last_client_seq se ignora; un ack viejo no retrocede', () => {
+    const t = setup();
+    connectReady(t, { max_inflight_bytes: 3200 });
+    t.c.sendAudio(1, 0, new Uint8Array(3200), false);
+    t.c.sendAudio(1, 1, new Uint8Array(3200), false);
+    t.ws().recv({ v: 1, type: 'ack', seq: 7, ts: '', session_id: 'S', ack: 1, data: { last_client_seq: 1 } });
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', data: {} });
+    expect(t.c.pendingCount).toBe(1);
+    expect(t.invalid).toEqual(['invalid ack', 'invalid ack']);
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', data: { last_client_seq: 1 } });
+    expect(t.c.pendingCount).toBe(0);
+    t.ws().recv({ v: 1, type: 'ack', seq: 0, ts: '', session_id: 'S', ack: 0, data: { last_client_seq: 0 } });
+    expect(t.c.inflightAudioBytes).toBe(3200);
+    // seq 0 solo vale para ack
+    t.ws().recv({ v: 1, type: 'question', seq: 0, ts: '', session_id: 'S', data: {} });
+    expect(t.invalid.at(-1)).toBe('invalid envelope');
   });
 
   it('sin resume (RESUME_GAP) acepta el hueco', () => {
@@ -238,9 +306,9 @@ describe('LiveConnection', () => {
     connectReady(t);
     t.ws().recv('no es json');
     t.ws().recv({ v: 2, type: 'question', seq: 99, data: {} });
-    t.ws().recv(srv('suggestion', { text: 'x' }));
+    t.ws().recv({ v: 1, type: 'suggestion', seq: 2, ts: '', session_id: 'S', data: { text: 'x' } });
     t.ws().recvBin(new ArrayBuffer(5));
-    const f = encodeFrame({ kind: BinKind.TTS_AUDIO, seq: 99, turnNo: 1, chunkIndex: 0, codec: BinCodec.WAV, last: true }, new Uint8Array(4));
+    const f = encodeFrame({ kind: BinKind.TTS_AUDIO, seq: 2, turnNo: 1, chunkIndex: 0, codec: BinCodec.WAV, last: true }, new Uint8Array(4));
     t.ws().recvBin(f);
     t.ws().onmessage?.({ data: 42 });
     expect(t.msgs.map((m) => m.type)).toEqual(['session.ready']);

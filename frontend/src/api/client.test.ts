@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, ROUTES, createApiClient, type FetchLike } from './client';
+import { ApiError, ROUTES, createApiClient, withUnauthorizedHandler, type FetchLike } from './client';
 
 type Call = { url: string; init: RequestInit & { headers: Record<string, string> } };
 function fake(responses: Response[]) {
@@ -74,5 +74,18 @@ describe('createApiClient', () => {
     expect(remote.liveUrl('s')).toBe('wss://h.test/v1/sessions/s/live');
     expect(remote.resolve('/v1/x')).toBe('https://h.test/v1/x');
     expect(remote.resolve('http://o/x')).toBe('http://o/x');
+  });
+  it('withUnauthorizedHandler: 401 UNAUTHENTICATED avisa (salvo en login) y relanza el error', async () => {
+    const { api } = fake([problem(401, 'UNAUTHENTICATED'), problem(401, 'UNAUTHENTICATED'), problem(403, 'FORBIDDEN'), j(200, { items: [] })]);
+    const onUnauth = vi.fn();
+    const g = withUnauthorizedHandler(api, onUnauth);
+    await expect(g.listSessions({})).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    expect(onUnauth).toHaveBeenCalledOnce();
+    await expect(g.login('mal')).rejects.toMatchObject({ status: 401 });
+    expect(onUnauth).toHaveBeenCalledOnce();
+    await expect(g.gaps('es')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await g.scenarios('es')).toEqual([]);
+    expect(onUnauth).toHaveBeenCalledOnce();
+    expect(g.liveUrl('s')).toBe(api.liveUrl('s'));
   });
 });

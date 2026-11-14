@@ -221,6 +221,12 @@ export const es = {
   'report.meta': "{scenario} · {date} · {lang} · {llm}",
   'report.yourAnswer': "Tu respuesta",
   'common.cancel': "Cancelar",
+  'report.fillers': "Muletillas: {list} ({rate} cada 100 palabras)",
+  'report.fillersNone': "Sin muletillas",
+  'report.fillersSource.stt': "detectadas por el reconocimiento de voz",
+  'report.fillersSource.texto': "detectadas en el texto de la transcripción",
+  'report.pauses': "Pausas largas: {count} (en total {total} s; la más larga, {longest} s)",
+  'report.pausesNone': "Sin pausas largas",
 } as const;
 
 export type MessageKey = keyof typeof es;

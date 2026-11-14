@@ -94,7 +94,7 @@ export const readyData = (over: Record<string, unknown> = {}) => ({
   max_inflight_bytes: 96000,
   max_turn_ms: 300000,
   resumed: false,
-  last_client_seq: 1,
+  last_client_seq: 0,
   question_index: 0,
   question_count: 2,
   ...over,

@@ -42,7 +42,8 @@ const ADVICE = {
 };
 const DIMS = Object.keys(ADVICE);
 
-const state = { sessions: new Map(), profile: null, profileRev: 0, tokens: new Set(), idem: new Map(), reportPolls: new Map() };
+const DEFAULT_CONFIG = { tts: 'binary', partials: true };
+const state = { sessions: new Map(), profile: null, profileRev: 0, tokens: new Set(), idem: new Map(), reportPolls: new Map(), config: { ...DEFAULT_CONFIG } };
 
 function reset() {
   for (const s of state.sessions.values()) s.ws?.terminate();
@@ -52,6 +53,7 @@ function reset() {
   state.tokens.clear();
   state.idem.clear();
   state.reportPolls.clear();
+  state.config = { ...DEFAULT_CONFIG };
 }
 
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -104,6 +106,7 @@ function createSession(body) {
     llm_provider: body.llm_provider ?? 'mock', max_followups: Math.min(2, body.max_followups ?? 2, scenario?.max_followups ?? 2),
     questions, created_at: body.__created_at ?? now(), started_at: null, ended_at: null, ended_reason: null,
     turns: [], report: null, ws: null, out: [], outSeq: 0, lastClientSeq: 0, engine: null,
+    config: { ...state.config }, ackSent: 0, ackBytes: 0, acks: 0, seqErrors: 0, unexpectedPlayed: 0, helloSeqs: [],
   };
   state.sessions.set(s.id, s);
   return s;
@@ -130,7 +133,14 @@ function scoreTurn(t, q) {
     turn_id: t.turn_id, kind: t.kind, probe: t.probe ?? null, question: t.question, answer: empty ? '[FALTA: sin respuesta]' : text, dims,
     overall: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null,
     score_source: 'heuristica', comment: empty ? '[FALTA: el usuario no respondió]' : 'Puntaje heurístico del mock.',
-    details: { segundos: t.duration_ms / 1000, segundos_estimados: t.source === 'text', ideal_segundos: [40, 120], palabras: words, muletillas: [], muletillas_cada_100: Math.round(rate * 10) / 10, numeros: text.match(/\d+/g) ?? [], star: { S: false, T: false, A: false, R: false } },
+    details: {
+      segundos: t.duration_ms / 1000, segundos_estimados: t.source === 'text', ideal_segundos: [40, 120], palabras: words,
+      muletillas: t.source === 'stt' ? ['eh'] : [], muletillas_cada_100: Math.round(rate * 10) / 10, numeros: text.match(/\d+/g) ?? [],
+      star: { S: false, T: false, A: false, R: false },
+      // v1.1 (opcionales): fuente de las muletillas y pausas largas que informa el STT (null por texto).
+      muletillas_fuente: t.source === 'stt' ? 'stt' : 'texto',
+      pausas: t.source === 'stt' ? { cantidad: 1, total_s: 0.8, mas_larga_s: 0.8 } : null,
+    },
     low_confidence: t.low_confidence ?? [],
   };
 }
@@ -207,6 +217,8 @@ function frame(kind, seq, turnNo, chunkIndex, codec, last, payload) {
 function send(s, type, data) {
   s.outSeq += 1;
   const msg = JSON.stringify({ v: 1, type, seq: s.outSeq, ts: new Date().toISOString(), session_id: s.id, ack: s.lastClientSeq, data });
+  s.ackSent = s.lastClientSeq;
+  s.ackBytes = 0;
   s.out.push({ seq: s.outSeq, data: msg });
   if (s.out.length > 512) s.out.shift();
   if (s.ws?.readyState === 1) s.ws.send(msg);
@@ -217,31 +229,69 @@ function sendBin(s, build) {
   s.out.push({ seq: s.outSeq, data: b });
   if (s.ws?.readyState === 1) s.ws.send(b);
 }
-
-function ask(s, kind = 'main') {
-  const e = s.engine;
-  const q = s.questions[e.qi];
-  e.utt += 1;
-  if (kind !== 'repeat') e.turnNo += 1;
-  e.state = 'asking';
-  e.chunks = 0;
-  e.bytes = 0;
-  e.utteranceId = `u-${e.utt}`;
-  const turn_id = `t-${e.turnNo}`;
-  e.turnId = turn_id;
-  if (e.followupIndex > 0 && kind !== 'repeat') {
-    e.current = { turn_id, question_id: q.id, kind: 'followup', probe: 'numbers', question: e.followupText };
-    send(s, 'followup', { turn_id, question_id: q.id, followup_index: e.followupIndex, max_followups: s.max_followups, probe: 'numbers', text: e.followupText, utterance_id: e.utteranceId });
-  } else {
-    const text = kind === 'repeat' && e.current ? e.current.question : q.text[s.lang];
-    if (kind !== 'repeat') e.current = { turn_id, question_id: q.id, kind: 'main', probe: null, question: text };
-    send(s, 'question', { turn_id, question_id: q.id, index: e.qi + 1, total: s.questions.length, text, lang: s.lang, utterance_id: e.utteranceId, kind });
+/** §5.8 (v1.1): ack liviano con seq 0, fuera de la secuencia y del buffer de reenvío. */
+function sendAck(s) {
+  s.ackSent = s.lastClientSeq;
+  s.ackBytes = 0;
+  s.acks += 1;
+  if (s.ws?.readyState === 1) {
+    s.ws.send(JSON.stringify({ v: 1, type: 'ack', seq: 0, ts: new Date().toISOString(), session_id: s.id, ack: s.lastClientSeq, data: { last_client_seq: s.lastClientSeq } }));
   }
+}
+
+function sendTts(s) {
+  const e = s.engine;
+  if (s.config.tts === 'none') return;
   const wav = wavSilence(300);
   const half = Math.ceil(wav.length / 2);
   const parts = [wav.subarray(0, half), wav.subarray(half)];
   send(s, 'tts.audio', { utterance_id: e.utteranceId, format: 'wav', sample_rate: 16000, duration_ms: 300, chunks: 2, bytes: wav.length, sha256: sha256(wav) });
   parts.forEach((p, i) => sendBin(s, (seq) => frame(0x02, seq, e.utt, i, 0x03, i === 1, p)));
+}
+
+function newUtterance(s) {
+  const e = s.engine;
+  e.utt += 1;
+  e.utteranceId = `u-${e.utt}`;
+  e.chunks = 0;
+  e.bytes = 0;
+}
+
+/** Intro (§5.5 v1.1): turn_id t-0, index 0; espera tts.played (salvo tts_delivery=none). */
+function intro(s) {
+  const e = s.engine;
+  newUtterance(s);
+  e.state = 'intro';
+  e.current = null;
+  send(s, 'question', { turn_id: 't-0', question_id: 'intro', index: 0, total: s.questions.length, text: s.lang === 'en' ? 'Hi. Let us practice.' : 'Hola. Vamos a practicar.', lang: s.lang, utterance_id: e.utteranceId, kind: 'intro' });
+  sendTts(s);
+  if (s.config.tts === 'none') startTurn(s);
+}
+
+/** Pregunta principal o repregunta con turn_id nuevo. */
+function startTurn(s) {
+  const e = s.engine;
+  const q = s.questions[e.qi];
+  e.turnNo += 1;
+  const turn_id = `t-${e.turnNo}`;
+  e.current = e.followupIndex > 0
+    ? { turn_id, question_id: q.id, kind: 'followup', probe: 'numbers', question: e.followupText, followupIndex: e.followupIndex }
+    : { turn_id, question_id: q.id, kind: 'main', probe: null, question: q.text[s.lang], followupIndex: 0 };
+  prompt(s, false);
+}
+
+/** Emite la intervención vigente. `repeat`: re-emisión con utterance y seq nuevos (§5.5 v1.1). */
+function prompt(s, repeat) {
+  const e = s.engine;
+  const c = e.current;
+  newUtterance(s);
+  e.state = s.config.tts === 'none' ? 'listening' : 'asking';
+  if (c.kind === 'followup') {
+    send(s, 'followup', { turn_id: c.turn_id, question_id: c.question_id, followup_index: c.followupIndex, max_followups: s.max_followups, probe: c.probe, text: c.question, utterance_id: e.utteranceId, ...(repeat ? { repeat: true } : {}) });
+  } else {
+    send(s, 'question', { turn_id: c.turn_id, question_id: c.question_id, index: e.qi + 1, total: s.questions.length, text: c.question, lang: s.lang, utterance_id: e.utteranceId, kind: repeat ? 'repeat' : 'main', ...(repeat ? { repeat: true } : {}) });
+  }
+  sendTts(s);
 }
 
 function finishTurn(s, text, source, durationMs) {
@@ -257,7 +307,7 @@ function finishTurn(s, text, source, durationMs) {
     e.followupIndex = used + 1;
     e.followupText = s.lang === 'en' ? 'Can you give me a concrete number?' : '¿Me podés dar un número concreto?';
     send(s, 'turn.end', { turn_id: cur.turn_id, reason: source === 'text' ? 'text' : 'audio_end', next: 'followup', followups_used: used, max_followups: s.max_followups });
-    return ask(s);
+    return startTurn(s);
   }
   nextQuestion(s, cur.turn_id, source === 'text' ? 'text' : 'audio_end', used);
 }
@@ -269,12 +319,18 @@ function nextQuestion(s, turnId, reason, used) {
   const done = e.qi >= s.questions.length;
   send(s, 'turn.end', { turn_id: turnId, reason, next: done ? 'end' : 'question', followups_used: used, max_followups: s.max_followups });
   if (done) return closeSession(s, 'completed');
-  ask(s);
+  startTurn(s);
 }
 
 function closeSession(s, reason) {
   const e = s.engine;
   endSession(s, reason);
+  if (reason === 'completed') {
+    // Cierre (§5.5 v1.1): turn_id t-0, index = total, antes de session.end; no se espera tts.played.
+    newUtterance(s);
+    send(s, 'question', { turn_id: 't-0', question_id: 'closing', index: s.questions.length, total: s.questions.length, text: s.lang === 'en' ? 'Thanks, we are done.' : 'Gracias, terminamos.', lang: s.lang, utterance_id: e.utteranceId, kind: 'closing' });
+    sendTts(s);
+  }
   e.state = 'ended';
   const answered = new Set(s.turns.filter((t) => t.answer).map((t) => t.question_id)).size;
   send(s, 'session.end', {
@@ -284,25 +340,31 @@ function closeSession(s, reason) {
   setTimeout(() => s.ws?.close(1000, 'ended'), 50);
 }
 
-function wsError(s, code, message, fatal = false, retryable = false, close_code = null) {
-  send(s, 'error', { code, message, fatal, retryable, ref_seq: null, close_code });
+function wsError(s, code, message, fatal = false, retryable = false, close_code = null, ref_seq = null) {
+  send(s, 'error', { code, message, fatal, retryable, ref_seq, close_code });
 }
 
 function onClientJson(s, m) {
   const e = s.engine;
   switch (m.type) {
     case 'tts.played':
-      if (e.state === 'asking' && m.data.utterance_id === e.utteranceId) e.state = 'listening';
+      if (s.config.tts === 'none') s.unexpectedPlayed += 1; // con tts_delivery=none el cliente no debe mandarlo
+      if (m.data.utterance_id !== e.utteranceId) return;
+      if (e.state === 'intro') return startTurn(s);
+      if (e.state === 'asking') e.state = 'listening';
       return;
     case 'audio.end': {
       if (e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'audio.end fuera de listening');
       if (e.bytes < 3200) {
-        wsError(s, 'NO_AUDIO', 'No te escuché bien.', false, true);
-        send(s, 'turn.end', { turn_id: e.turnId, reason: 'no_audio', next: 'repeat', followups_used: e.followupIndex, max_followups: s.max_followups });
-        return ask(s, 'repeat');
+        // §5.5 v1.1: NO_AUDIO → turn.end next=repeat y la misma pregunta con turn_id nuevo y repeat=true.
+        wsError(s, 'NO_AUDIO', 'No te escuché bien. ¿Podés repetir tu respuesta?', false, true);
+        send(s, 'turn.end', { turn_id: e.current.turn_id, reason: 'no_audio', next: 'repeat', followups_used: e.followupIndex, max_followups: s.max_followups });
+        e.turnNo += 1;
+        e.current = { ...e.current, turn_id: `t-${e.turnNo}` };
+        return prompt(s, true);
       }
       e.state = 'processing';
-      const hex = sha256(Buffer.from(`${e.turnId}:${e.bytes}`)).slice(0, 8);
+      const hex = sha256(Buffer.from(`${e.current.turn_id}:${e.bytes}`)).slice(0, 8);
       const text = s.lang === 'en' ? `simulated answer ${hex}` : `respuesta simulada ${hex}`;
       return finishTurn(s, text, 'stt', Math.round((e.bytes / 32000) * 1000));
     }
@@ -311,11 +373,13 @@ function onClientJson(s, m) {
       e.state = 'processing';
       return finishTurn(s, m.data.text, 'text', Math.round(m.data.text.split(/\s+/).length * 400));
     case 'control.skip':
+      if (e.state !== 'asking' && e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'nada que saltar');
       e.skipped += 1;
-      return nextQuestion(s, e.turnId, 'skip', e.followupIndex);
+      return nextQuestion(s, e.current.turn_id, 'skip', e.followupIndex);
     case 'control.repeat':
-      send(s, 'turn.end', { turn_id: e.turnId, reason: 'repeat', next: 'repeat', followups_used: e.followupIndex, max_followups: s.max_followups });
-      return ask(s, 'repeat');
+      // §5.5 v1.1: misma intervención, mismo turn_id/question_id, repeat=true, sin turn.end.
+      if (e.state !== 'asking' && e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'nada que repetir');
+      return prompt(s, true);
     case 'control.pause':
       if (e.state !== 'asking' && e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'nada que pausar');
       e.state = 'paused';
@@ -323,7 +387,7 @@ function onClientJson(s, m) {
     case 'control.resume':
       if (e.state !== 'paused') return wsError(s, 'STATE_CONFLICT', 'no está en pausa');
       send(s, 'resume', { state: 'asking' });
-      return ask(s, 'repeat');
+      return prompt(s, true);
     case 'control.end':
       return closeSession(s, 'user');
     case 'ping':
@@ -337,19 +401,22 @@ function onClientJson(s, m) {
 
 function onClientBinary(s, buf) {
   const e = s.engine;
-  if (buf.length < HEADER_LEN || buf[0] !== 0x43 || buf[1] !== 0x58 || buf[2] !== 1 || buf.readUInt16BE(18) !== buf.length - HEADER_LEN) {
-    return wsError(s, 'INVALID_MESSAGE', 'frame binario inválido');
-  }
   if (buf[3] !== 0x01 || buf[16] !== 0x01) return wsError(s, 'INVALID_MESSAGE', 'kind/codec inesperado');
   if (e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'audio fuera de listening');
-  if (`t-${buf.readUInt32BE(8)}` !== e.turnId) return wsError(s, 'INVALID_MESSAGE', 'turn_no no coincide');
+  if (`t-${buf.readUInt32BE(8)}` !== e.current?.turn_id) return wsError(s, 'INVALID_MESSAGE', 'turn_no no coincide');
+  const len = buf.length - HEADER_LEN;
   e.chunks += 1;
-  e.bytes += buf.length - HEADER_LEN;
-  if (e.chunks % 10 === 0) {
+  e.bytes += len;
+  // §5.8: ack cada 32 KB (además del timer de 250 ms).
+  s.ackBytes += len;
+  if (s.ackBytes >= 32 * 1024) sendAck(s);
+  if (s.config.partials && e.chunks % 10 === 0) {
     e.revision += 1;
-    send(s, 'transcript.partial', { turn_id: e.turnId, text: s.lang === 'en' ? 'simulated partial' : 'parcial simulado', revision: e.revision, audio_ms: Math.round((e.bytes / 32000) * 1000) });
+    send(s, 'transcript.partial', { turn_id: e.current.turn_id, text: s.lang === 'en' ? 'simulated partial' : 'parcial simulado', revision: e.revision, audio_ms: Math.round((e.bytes / 32000) * 1000) });
   }
 }
+
+const validFrame = (buf) => buf.length >= HEADER_LEN && buf[0] === 0x43 && buf[1] === 0x58 && buf[2] === 1 && buf.readUInt16BE(18) === buf.length - HEADER_LEN;
 
 function attach(s, ws) {
   if (s.ws && s.ws !== ws) {
@@ -364,12 +431,27 @@ function attach(s, ws) {
   const helloTimer = setTimeout(() => {
     if (!hello) ws.close(4400, 'hello required');
   }, 5000);
+  // §5.8: ack periódico cada 250 ms en listening, solo si avanzó last_client_seq.
+  const ackTimer = setInterval(() => {
+    if (s.ws === ws && s.engine?.state === 'listening' && s.lastClientSeq > s.ackSent) sendAck(s);
+  }, 250);
+  /** §5.2 v1.1: descarta seq <= last_client_seq; un hueco es SEQ_OUT_OF_ORDER. */
+  const inSeq = (seq) => {
+    if (seq <= s.lastClientSeq) return false;
+    if (seq > s.lastClientSeq + 1) {
+      s.seqErrors += 1;
+      wsError(s, 'SEQ_OUT_OF_ORDER', 'hueco de seq', false, true, null, s.lastClientSeq + 1);
+      return false;
+    }
+    s.lastClientSeq = seq;
+    return true;
+  };
   ws.on('message', (data, isBinary) => {
     if (s.ws !== ws) return;
     if (isBinary) {
-      const seq = data.length >= 8 ? data.readUInt32BE(4) : 0;
-      if (seq <= s.lastClientSeq) return; // duplicado tras resume
-      s.lastClientSeq = seq;
+      if (!hello) return ws.close(4400, 'hello');
+      if (!validFrame(data)) return wsError(s, 'INVALID_MESSAGE', 'frame binario inválido');
+      if (!inSeq(data.readUInt32BE(4))) return;
       return onClientBinary(s, data);
     }
     let m;
@@ -379,9 +461,8 @@ function attach(s, ws) {
       if (m.type !== 'hello') { wsError(s, 'HELLO_REQUIRED', 'primero hello', true, true, 4400); return ws.close(4400, 'hello'); }
       hello = true;
       clearTimeout(helloTimer);
-      // SUPUESTO (ambigüedad reportada): el hello de reconexión no cuenta para la deduplicación;
-      // si contara, el reenvío de seq < hello.seq del ejemplo §5.12 se descartaría.
-      if (m.seq > s.lastClientSeq && !m.data?.resume) s.lastClientSeq = m.seq;
+      // §5.2 v1.1: el hello va con seq 0 y queda fuera de la secuencia (el servidor ignora su seq).
+      s.helloSeqs.push(m.seq);
       const formats = m.data?.audio_formats ?? [];
       if (!formats.some((f) => f.codec === 'pcm16le' && f.sample_rate === 16000)) {
         wsError(s, 'UNSUPPORTED_FORMAT', 'falta pcm16le', true, false, 4400);
@@ -389,26 +470,30 @@ function attach(s, ws) {
       }
       const resumeFrom = m.data?.resume?.last_server_seq;
       const resumed = typeof resumeFrom === 'number' && s.engine !== null;
-      // Orden del ejemplo §5.12: session.ready y después el reenvío con el seq original.
+      // Un hello sin resume es un cliente nuevo: su secuencia vuelve a empezar en 1.
+      if (!resumed) s.lastClientSeq = 0;
+      // §5.12: session.ready con seq nuevo y DESPUÉS el reenvío con el seq original.
       const pending = resumed ? s.out.filter((o) => o.seq > resumeFrom) : [];
       send(s, 'session.ready', {
-        state: s.engine?.state ?? 'ready', audio_format: { codec: 'pcm16le', sample_rate: 16000, channels: 1, frame_ms: 100 },
-        tts_delivery: 'binary', tts_format: 'wav', heartbeat_ms: 15000, idle_timeout_ms: 45000, max_inflight_bytes: 96000,
+        state: s.engine?.state === 'intro' ? 'intro' : (s.engine?.state ?? 'ready'), audio_format: { codec: 'pcm16le', sample_rate: 16000, channels: 1, frame_ms: 100 },
+        tts_delivery: s.config.tts, ...(s.config.tts === 'none' ? {} : { tts_format: 'wav' }), heartbeat_ms: 15000, idle_timeout_ms: 45000, max_inflight_bytes: 96000,
         max_turn_ms: 300000, resumed, last_client_seq: s.lastClientSeq, question_index: s.engine ? s.engine.qi + 1 : 0, question_count: s.questions.length,
       });
       for (const o of pending) ws.send(o.data);
       if (!s.engine) {
-        s.engine = { qi: 0, turnNo: 0, utt: 0, state: 'ready', followupIndex: 0, followupText: '', chunks: 0, bytes: 0, revision: 0, skipped: 0, current: null, turnId: null, utteranceId: null };
-        ask(s);
+        s.engine = { qi: 0, turnNo: 0, utt: 0, state: 'ready', followupIndex: 0, followupText: '', chunks: 0, bytes: 0, revision: 0, skipped: 0, current: null, utteranceId: null };
+        intro(s);
       }
       return;
     }
-    if (m.seq <= s.lastClientSeq) return; // duplicado tras resume (§2.4)
-    s.lastClientSeq = m.seq;
+    if (m.type === 'hello') return wsError(s, 'INVALID_MESSAGE', 'hello repetido');
+    if (m.seq === 0) return wsError(s, 'INVALID_MESSAGE', 'seq 0 solo para hello');
+    if (!inSeq(m.seq)) return;
     onClientJson(s, m);
   });
   ws.on('close', () => {
     clearTimeout(helloTimer);
+    clearInterval(ackTimer);
     if (s.ws === ws) {
       s.ws = null;
       if (s.status === 'live') s.status = 'detached';
@@ -441,13 +526,20 @@ async function handle(req, res) {
   // Endpoints exclusivos del mock para los tests (no existen en el contrato).
   if (p === '/__mock/reset' && method === 'POST') { reset(); return json(res, 200, { ok: true }); }
   if (p === '/__mock/seed' && method === 'POST') { seed(); return json(res, 200, { ok: true }); }
+  // Configura las sesiones nuevas: tts 'binary'|'none' y partials true|false (para probar acks).
+  if (p === '/__mock/config' && method === 'POST') {
+    const b = await readBody(req);
+    if (b && (b.tts === 'binary' || b.tts === 'none')) state.config.tts = b.tts;
+    if (b && typeof b.partials === 'boolean') state.config.partials = b.partials;
+    return json(res, 200, state.config);
+  }
   if (p === '/__mock/drop-ws' && method === 'POST') {
     let n = 0;
     for (const s of state.sessions.values()) if (s.ws) { s.ws.close(4008, 'test drop'); n += 1; }
     return json(res, 200, { dropped: n });
   }
   if (p === '/__mock/state' && method === 'GET') {
-    return json(res, 200, { sessions: [...state.sessions.values()].map((s) => ({ id: s.id, status: s.status, lastClientSeq: s.lastClientSeq, turns: s.turns, engineState: s.engine?.state ?? null })) });
+    return json(res, 200, { sessions: [...state.sessions.values()].map((s) => ({ id: s.id, status: s.status, lastClientSeq: s.lastClientSeq, turns: s.turns, engineState: s.engine?.state ?? null, acks: s.acks, seqErrors: s.seqErrors, unexpectedPlayed: s.unexpectedPlayed, helloSeqs: s.helloSeqs })) });
   }
 
   if (p === '/v1/health') return json(res, 200, { status: 'ok', version: 'mock' });

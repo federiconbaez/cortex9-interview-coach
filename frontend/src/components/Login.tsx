@@ -4,7 +4,7 @@ import { useApi } from '../api/context';
 import { useI18n } from '../i18n';
 
 /** Login del único usuario local (§2.6). El token queda en la cookie HttpOnly; no se guarda nada en el navegador. */
-export function Login({ onDone }: { onDone: () => void }) {
+export function Login({ onDone, expired = false }: { onDone: () => void; expired?: boolean }) {
   const api = useApi();
   const { t } = useI18n();
   const id = useId();
@@ -34,6 +34,11 @@ export function Login({ onDone }: { onDone: () => void }) {
   return (
     <form onSubmit={submit} className="card stack narrow" aria-labelledby={`${id}-h`}>
       <h2 id={`${id}-h`}>{t('login.heading')}</h2>
+      {expired && (
+        <p role="alert" className="alert">
+          {t('conn.auth')}
+        </p>
+      )}
       <div className="field">
         <label htmlFor={`${id}-pw`}>{t('login.password')}</label>
         <input

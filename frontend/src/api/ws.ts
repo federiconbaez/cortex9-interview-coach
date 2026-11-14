@@ -106,8 +106,12 @@ type ClientData<T extends ClientMessage['type']> = Extract<ClientMessage, { type
 const OPEN = 1;
 const SERVER_TYPES = new Set<string>([
   'session.ready', 'question', 'followup', 'tts.audio', 'tts.url', 'transcript.partial', 'transcript.final',
-  'pause', 'resume', 'turn.end', 'session.end', 'error', 'ping', 'pong',
+  'pause', 'resume', 'turn.end', 'session.end', 'error', 'ack', 'ping', 'pong',
 ]);
+/** Tiempo máximo esperando que se llene un hueco de seq del servidor antes de aceptarlo. */
+const GAP_TIMEOUT_MS = 2000;
+/** Máximo de mensajes retenidos fuera de orden. */
+const MAX_HELD = 1024;
 
 export class LiveConnection {
   private ws: WsLike | null = null;
@@ -115,7 +119,10 @@ export class LiveConnection {
   private attempt = 0;
   private outSeq = 0;
   private lastServerSeq = 0;
+  /** Seq mayores al contiguo ya procesados (solo `session.ready`, que no espera). */
   private seenAhead = new Set<number>();
+  /** Mensajes retenidos hasta que llegue el seq que falta (§5.2: el cliente ordena por seq). */
+  private held = new Map<number, () => void>();
   private ack = 0;
   private ready = false;
   private everReady = false;
@@ -128,7 +135,7 @@ export class LiveConnection {
   private idleMs: number = IDLE_TIMEOUT_MS;
   private outbox: OutItem[] = [];
   private unacked: OutItem[] = [];
-  private timers: { reconnect: unknown; heartbeat: unknown; idle: unknown } = { reconnect: null, heartbeat: null, idle: null };
+  private timers: { reconnect: unknown; heartbeat: unknown; idle: unknown; gap: unknown } = { reconnect: null, heartbeat: null, idle: null, gap: null };
   private nonce = 0;
   private readonly o: BackoffOptions;
   private readonly clock: Clock;
@@ -179,7 +186,8 @@ export class LiveConnection {
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.onopen = () => {
-      // §5.1: hello en ≤ 5 s. El hello consume seq (§5.12, ejemplo de reconexión).
+      // §5.1/§5.2 (v1.1): hello en ≤ 5 s, SIEMPRE con seq 0: no consume secuencia ni cuenta
+      // para el dedupe. Con resume, la secuencia del cliente sigue desde su último seq.
       const data: ClientData<'hello'> = {
         client: this.opts.client ?? 'cx9-frontend/0.1.0',
         audio_formats: [BASELINE_AUDIO],
@@ -188,7 +196,7 @@ export class LiveConnection {
         partials: true,
         resume: this.everReady ? { last_server_seq: this.lastServerSeq } : null,
       };
-      ws.send(this.envelope('hello', this.nextSeq(), data));
+      ws.send(this.envelope('hello', 0, data));
       this.armIdle();
     };
     ws.onmessage = (ev) => this.onRaw(ev.data);
@@ -239,6 +247,7 @@ export class LiveConnection {
     if (this.timers.idle !== null) this.clock.clearTimeout(this.timers.idle);
     this.timers.heartbeat = null;
     this.timers.idle = null;
+    this.clearGap();
   }
 
   private onRaw(raw: unknown) {
@@ -251,9 +260,11 @@ export class LiveConnection {
         this.opts.onInvalid?.(e instanceof Error ? e.message : 'frame');
         return;
       }
-      if (!this.acceptSeq(frame.header.seq)) return;
-      if (frame.header.kind === BinKind.TTS_AUDIO) this.opts.onTtsFrame?.(frame.header, frame.payload);
-      else this.opts.onInvalid?.(`binary kind ${frame.header.kind}`);
+      const { header, payload } = frame;
+      this.inOrder(header.seq, false, () => {
+        if (header.kind === BinKind.TTS_AUDIO) this.opts.onTtsFrame?.(header, payload);
+        else this.opts.onInvalid?.(`binary kind ${header.kind}`);
+      });
       return;
     }
     if (typeof raw !== 'string') return this.opts.onInvalid?.('non-string message');
@@ -265,9 +276,22 @@ export class LiveConnection {
     }
     if (!isEnvelope(v)) return this.opts.onInvalid?.('invalid envelope');
     if (!SERVER_TYPES.has(v.type)) return this.opts.onInvalid?.(`unknown type ${v.type}`); // §2.1: se ignora
-    if (!this.acceptSeq(v.seq)) return;
+    if (v.type === 'ack') {
+      // §5.8 (v1.1): ack periódico con seq 0, fuera de la secuencia. Libera la ventana de audio.
+      const d = v.data as { last_client_seq?: unknown };
+      const n = typeof v.ack === 'number' ? v.ack : typeof d.last_client_seq === 'number' ? d.last_client_seq : null;
+      if (v.seq !== 0 || n === null) return this.opts.onInvalid?.('invalid ack');
+      this.onAck(n);
+      return;
+    }
+    if (v.seq === 0) return this.opts.onInvalid?.('invalid envelope');
+    // El ack del sobre se aplica al recibir (es monótono), aunque el mensaje quede retenido.
     if (typeof v.ack === 'number') this.onAck(v.ack);
     const m = v as unknown as ServerMessage;
+    this.inOrder(v.seq, m.type === 'session.ready', () => this.dispatch(m));
+  }
+
+  private dispatch(m: ServerMessage) {
     switch (m.type) {
       case 'session.ready':
         this.onReady(m.data);
@@ -285,28 +309,73 @@ export class LiveConnection {
   }
 
   /**
-   * Control de duplicados del servidor. `lastServerSeq` es el último seq recibido de forma
-   * CONTIGUA (lo que se manda en `resume.last_server_seq`); los seq posteriores ya vistos se
-   * guardan aparte. Hace falta porque, según el ejemplo de §5.12, el servidor manda
-   * `session.ready` con un seq NUEVO y DESPUÉS reenvía los mensajes viejos con su seq original.
+   * Orden y duplicados del servidor (§5.2). `lastServerSeq` es el último seq procesado de forma
+   * CONTIGUA (lo que se manda en `resume.last_server_seq`). Un seq repetido se descarta. Un seq
+   * adelantado se retiene hasta que llegue el que falta, salvo `session.ready`, que se procesa
+   * enseguida: tras reconectar llega con un seq nuevo ANTES que los reenvíos de seq menores.
    */
-  private acceptSeq(seq: number): boolean {
-    if (seq <= this.lastServerSeq || this.seenAhead.has(seq)) return false;
-    this.seenAhead.add(seq);
-    while (this.seenAhead.has(this.lastServerSeq + 1)) {
-      this.seenAhead.delete(this.lastServerSeq + 1);
-      this.lastServerSeq += 1;
+  private inOrder(seq: number, immediate: boolean, run: () => void) {
+    if (seq <= this.lastServerSeq || this.seenAhead.has(seq) || this.held.has(seq)) return; // duplicado
+    if (seq === this.lastServerSeq + 1) {
+      this.lastServerSeq = seq;
+      run();
+      this.drain();
+      return;
     }
-    if (this.seenAhead.size > 1024) this.skipGap();
-    return true;
+    if (immediate) {
+      this.seenAhead.add(seq);
+      run();
+    } else {
+      this.held.set(seq, run);
+    }
+    const pending = this.held.size + this.seenAhead.size;
+    if (pending > MAX_HELD) this.skipGap();
+    else if (pending > 0) this.armGap();
   }
 
-  /** Acepta un hueco que no se va a llenar (RESUME_GAP): avanza al máximo visto. */
+  /** Procesa lo retenido que ya es contiguo. */
+  private drain() {
+    for (;;) {
+      const next = this.lastServerSeq + 1;
+      if (this.seenAhead.delete(next)) {
+        this.lastServerSeq = next;
+        continue;
+      }
+      const run = this.held.get(next);
+      if (!run) break;
+      this.held.delete(next);
+      this.lastServerSeq = next;
+      run();
+    }
+    if (this.held.size === 0 && this.seenAhead.size === 0) this.clearGap();
+  }
+
+  private armGap() {
+    if (this.timers.gap !== null) return;
+    this.timers.gap = this.clock.setTimeout(() => {
+      this.timers.gap = null;
+      this.skipGap();
+    }, GAP_TIMEOUT_MS);
+  }
+
+  private clearGap() {
+    if (this.timers.gap !== null) this.clock.clearTimeout(this.timers.gap);
+    this.timers.gap = null;
+  }
+
+  /** Acepta un hueco que no se va a llenar (RESUME_GAP o timeout): procesa lo retenido en orden. */
   private skipGap() {
-    if (this.seenAhead.size === 0) return;
+    if (this.held.size === 0 && this.seenAhead.size === 0) return;
     this.opts.onInvalid?.(`server seq gap after ${this.lastServerSeq}`);
-    this.lastServerSeq = Math.max(...this.seenAhead);
+    const all = [...new Set([...this.held.keys(), ...this.seenAhead])].sort((a, b) => a - b);
+    const held = this.held;
+    this.held = new Map();
     this.seenAhead.clear();
+    this.clearGap();
+    for (const seq of all) {
+      this.lastServerSeq = seq;
+      held.get(seq)?.();
+    }
   }
 
   /** Último seq del servidor procesado de forma contigua (para tests y diagnóstico). */
@@ -400,6 +469,7 @@ export class LiveConnection {
 function isEnvelope(v: unknown): v is { v: 1; type: string; seq: number; ack?: number; data: Record<string, unknown> } {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
-  return o.v === 1 && typeof o.type === 'string' && typeof o.seq === 'number' && Number.isInteger(o.seq) && o.seq >= 1 &&
+  // seq 0 solo es válido en `ack` (se valida aparte).
+  return o.v === 1 && typeof o.type === 'string' && typeof o.seq === 'number' && Number.isInteger(o.seq) && o.seq >= 0 &&
     typeof o.data === 'object' && o.data !== null;
 }

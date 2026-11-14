@@ -17,8 +17,16 @@ export async function login(page: Page) {
 
 export async function mockState(request: APIRequestContext) {
   return (await (await request.get(`${MOCK}/__mock/state`)).json()) as {
-    sessions: { id: string; status: string; lastClientSeq: number; engineState: string | null; turns: { kind: string; answer: string; source: string; duration_ms: number }[] }[];
+    sessions: {
+      id: string; status: string; lastClientSeq: number; engineState: string | null;
+      acks: number; seqErrors: number; unexpectedPlayed: number; helloSeqs: number[];
+      turns: { kind: string; turn_id: string; answer: string; source: string; duration_ms: number }[];
+    }[];
   };
+}
+
+export async function mockConfig(request: APIRequestContext, cfg: { tts?: 'binary' | 'none'; partials?: boolean }) {
+  expect((await request.post(`${MOCK}/__mock/config`, { data: cfg })).ok()).toBe(true);
 }
 
 export async function expectNoA11yViolations(page: Page) {

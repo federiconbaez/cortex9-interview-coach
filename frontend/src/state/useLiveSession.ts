@@ -41,6 +41,8 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
   const player = useRef<TtsPlayer | null>(null);
   const turnRef = useRef<{ turnId: string; turnNo: number; chunk: number } | null>(null);
   const utteranceRef = useRef<string | null>(null);
+  /** No se manda tts.played con tts_delivery=none ni para el cierre (el servidor no lo espera, §5.5 v1.1). */
+  const noPlayedRef = useRef<{ delivery: boolean; closing: boolean }>({ delivery: false, closing: false });
   const playedRef = useRef<Set<string>>(new Set());
   const endRef = useRef<() => void>(() => undefined);
 
@@ -48,7 +50,7 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
     const u = utteranceRef.current;
     if (!u || playedRef.current.has(u)) return;
     playedRef.current.add(u);
-    conn.current?.sendJson('tts.played', { utterance_id: u });
+    if (!noPlayedRef.current.delivery && !noPlayedRef.current.closing) conn.current?.sendJson('tts.played', { utterance_id: u });
     dispatch({ type: 'ttsPlayed' });
   }, []);
 
@@ -70,8 +72,11 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
         // reconectar (§5.9); la captura sigue y el usuario no pierde lo dicho.
       },
       onMessage: (msg) => {
-        if (msg.type === 'question' || msg.type === 'followup') {
+        if (msg.type === 'session.ready') {
+          noPlayedRef.current.delivery = msg.data.tts_delivery === 'none';
+        } else if (msg.type === 'question' || msg.type === 'followup') {
           utteranceRef.current = msg.data.utterance_id;
+          noPlayedRef.current.closing = msg.type === 'question' && msg.data.kind === 'closing';
           p.release();
         } else if (msg.type === 'tts.audio') {
           if (msg.data.utterance_id === utteranceRef.current) {
@@ -85,7 +90,8 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
             turnRef.current = null;
             mic.current?.cancel();
           }
-          p.pause();
+          // El cierre llega justo antes de session.end: se deja sonar.
+          if (msg.type === 'pause') p.pause();
         }
         dispatch({ type: 'server', msg });
       },

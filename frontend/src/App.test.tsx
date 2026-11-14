@@ -83,4 +83,29 @@ describe('App', () => {
     render(<App client={api} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('DEPENDENCY_UNAVAILABLE');
   });
+  it('401 UNAUTHENTICATED en medio del uso vuelve al login con aviso', async () => {
+    const api = fakeApi({ listSessions: vi.fn(async () => Promise.reject(unauthorized())) });
+    render(<App client={api} liveDeps={fakeLiveDeps().deps} />);
+    await userEvent.click(await screen.findByRole('button', { name: es['nav.history'] }));
+    expect(await screen.findByRole('heading', { name: es['login.heading'] })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(es['conn.auth']);
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+  });
+
+  it('cierre WS 4001 durante la práctica verifica la cookie y, con 401, vuelve al login', async () => {
+    let expired = false;
+    const api = fakeApi({
+      me: vi.fn(async () => {
+        if (expired) throw unauthorized();
+        return { authenticated: true } as never;
+      }),
+    });
+    const { deps, h } = fakeLiveDeps();
+    render(<App client={api} liveDeps={deps} />);
+    await userEvent.click(await screen.findByRole('button', { name: es['setup.start'] }));
+    await screen.findByRole('heading', { name: es['practice.heading'] });
+    expired = true;
+    act(() => h.opts?.onState('failed', { attempt: 0, closeCode: 4001 }));
+    expect(await screen.findByRole('heading', { name: es['login.heading'] })).toBeInTheDocument();
+  });
 });

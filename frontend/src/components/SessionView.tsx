@@ -51,6 +51,12 @@ export function SessionView({ url, sessionId, input, capture, deps, onReport }: 
   const turn = state.turn;
   const recording = state.recording;
 
+  // Cierre 4001 (AUTH_FAILED): se verifica la cookie; si da 401 UNAUTHENTICATED, la app vuelve al login.
+  const authFailed = state.conn === 'failed' && state.closeCode === CloseCode.AUTH_FAILED;
+  useEffect(() => {
+    if (authFailed) api.me().catch(() => undefined);
+  }, [authFailed, api]);
+
   // Push-to-talk con la barra espaciadora (si el foco no está en un campo de texto).
   const pttRef = useRef({ start: s.startAnswer, end: s.endAnswer, can: s.answerable, recording });
   useEffect(() => {
@@ -117,16 +123,18 @@ export function SessionView({ url, sessionId, input, capture, deps, onReport }: 
             : t('practice.paused')
         : '';
 
-  const kindLabel =
+  const baseLabel =
     turn?.kind === 'followup'
       ? t('practice.followupN', { n: turn.followupIndex ?? 1, max: turn.maxFollowups ?? 2 })
       : turn?.kind === 'intro'
         ? t('practice.intro')
         : turn?.kind === 'closing'
           ? t('practice.closing')
-          : turn?.kind === 'repeat'
-            ? t('practice.repeat')
-            : null;
+          : null;
+  // v1.1: `repeat: true` marca una re-emisión (también de una repregunta).
+  const kindLabel = turn?.repeat ? [baseLabel, t('practice.repeat')].filter(Boolean).join(' · ') : baseLabel;
+  // Intro (index 0) y cierre (index = total) no son "Pregunta N de M".
+  const showProgress = turn !== null && turn.kind !== 'intro' && turn.kind !== 'closing' && turn.index !== null && turn.total !== null && turn.index > 0;
 
   const open = state.conn === 'open';
   const askingOrListening = state.server === 'asking' || state.server === 'listening';
@@ -164,8 +172,8 @@ export function SessionView({ url, sessionId, input, capture, deps, onReport }: 
         {turn ? (
           <>
             <p className="muted">
-              {turn.index !== null && turn.total !== null && t('practice.progress', { index: turn.index, total: turn.total })}
-              {kindLabel && <span className="tag"> · {kindLabel}</span>}
+              {showProgress && t('practice.progress', { index: turn.index ?? 0, total: turn.total ?? 0 })}
+              {kindLabel && <span className="tag">{showProgress ? ' · ' : ''}{kindLabel}</span>}
               {turn.probe && <span className="tag"> · {t(`probe.${turn.probe}`)}</span>}
             </p>
             {/* La pregunta nueva se anuncia una vez por lector de pantalla. */}

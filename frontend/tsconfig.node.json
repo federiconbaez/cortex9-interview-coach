@@ -15,5 +15,5 @@
     "checkJs": false,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "e2e", "mock-server"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.real.config.ts", "e2e", "e2e-real", "mock-server"]
 }

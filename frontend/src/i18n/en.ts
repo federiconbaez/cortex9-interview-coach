@@ -223,4 +223,10 @@ export const en: Record<MessageKey, string> = {
   'report.meta': "{scenario} · {date} · {lang} · {llm}",
   'report.yourAnswer': "Your answer",
   'common.cancel': "Cancel",
+  'report.fillers': "Filler words: {list} ({rate} per 100 words)",
+  'report.fillersNone': "No filler words",
+  'report.fillersSource.stt': "detected by speech recognition",
+  'report.fillersSource.texto': "detected in the transcript text",
+  'report.pauses': "Long pauses: {count} ({total} s in total; longest {longest} s)",
+  'report.pausesNone': "No long pauses",
 };

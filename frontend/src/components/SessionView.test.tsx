@@ -22,9 +22,9 @@ function setup(input: 'voice' | 'text', capture: 'vad' | 'ptt' = 'vad', micError
     return h.opts;
   };
   const send = (type: string, data: unknown) => act(() => o().onMessage(env(type, data)));
-  const open = () => {
+  const open = (over: Record<string, unknown> = {}) => {
     act(() => o().onState('open', { attempt: 0 }));
-    send('session.ready', ready);
+    send('session.ready', { ...ready, ...over });
   };
   return { h, o, send, open, onReport, api };
 }
@@ -109,7 +109,8 @@ describe('SessionView', () => {
     const t = setup('text');
     t.open();
     t.send('question', question({ kind: 'intro' }));
-    expect(screen.getByText(`· ${es['practice.intro']}`)).toBeInTheDocument();
+    expect(screen.getByText(es['practice.intro'])).toBeInTheDocument();
+    expect(screen.queryByText(/Pregunta 0/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: es['answer.typedSend'] })).toBeDisabled();
     t.send('question', question({ turn_id: 't-2', utterance_id: 'u-2' }));
     await userEvent.type(screen.getByLabelText(es['answer.textOnly']), 'Bajé la latencia 40 %');
@@ -147,5 +148,44 @@ describe('SessionView', () => {
     await userEvent.click(screen.getByRole('button', { name: es['control.end'] }));
     await waitFor(() => expect(t.api.endSession).toHaveBeenCalledWith('S'));
     await waitFor(() => expect(t.onReport).toHaveBeenCalledWith('S'));
+  });
+  it('v1.1: con tts_delivery=none no manda tts.played y se puede responder enseguida', async () => {
+    const t = setup('text');
+    t.open({ tts_delivery: 'none', tts_format: undefined });
+    t.send('question', question());
+    expect(screen.queryByTestId('tts-toggle')).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(es['answer.textOnly']), 'Hice 3 cosas');
+    await userEvent.click(screen.getByRole('button', { name: es['answer.typedSend'] }));
+    expect(t.h.sent.map((m) => m.type)).toEqual(['answer.text']);
+  });
+
+  it('v1.1: intro sin "Pregunta 0", repetición marcada y el cierre no manda tts.played', async () => {
+    const t = setup('voice');
+    t.open();
+    const tts = async (utt: string, turnNo: number) => {
+      t.send('tts.audio', { utterance_id: utt, format: 'wav', sample_rate: 16000, chunks: 1, bytes: 4, duration_ms: 1, sha256: null });
+      await act(async () => {
+        t.o().onTtsFrame?.({ kind: BinKind.TTS_AUDIO, seq: 1, turnNo, chunkIndex: 0, codec: BinCodec.WAV, last: true, payloadLen: 4 }, new Uint8Array(4));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      act(() => t.h.element?.onended?.());
+    };
+    t.send('question', question({ turn_id: 't-0', question_id: 'intro', index: 0, kind: 'intro', utterance_id: 'u-1' }));
+    expect(screen.queryByText(/Pregunta 0/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('answer-toggle')).toHaveAttribute('aria-disabled', 'true');
+    await tts('u-1', 1);
+    t.send('question', question({ utterance_id: 'u-2' }));
+    await tts('u-2', 2);
+    await userEvent.click(screen.getByRole('button', { name: es['control.repeat'] }));
+    t.send('question', question({ utterance_id: 'u-3', kind: 'repeat', repeat: true }));
+    expect(screen.getByText(`· ${es['practice.repeat']}`)).toBeInTheDocument();
+    expect(screen.getByText('Pregunta 1 de 2')).toBeInTheDocument();
+    await tts('u-3', 3);
+    t.send('question', question({ turn_id: 't-0', question_id: 'closing', index: 2, total: 2, kind: 'closing', utterance_id: 'u-4' }));
+    expect(screen.getByText(es['practice.closing'])).toBeInTheDocument();
+    await tts('u-4', 4);
+    const played = t.h.sent.filter((x) => x.type === 'tts.played').map((x) => (x.data as { utterance_id: string }).utterance_id);
+    expect(played).toEqual(['u-1', 'u-2', 'u-3']);
+    expect(t.h.sent.filter((x) => x.type === 'control.repeat')).toEqual([{ type: 'control.repeat', data: { turn_id: 't-1' } }]);
   });
 });

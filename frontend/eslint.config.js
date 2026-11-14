@@ -15,7 +15,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['e2e/**/*.ts', 'mock-server/**/*.mjs', '*.config.{ts,js}'],
+    files: ['e2e/**/*.ts', 'e2e-real/**/*.{ts,mjs}', 'mock-server/**/*.mjs', '*.config.{ts,js}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { globals: globals.node },
   },

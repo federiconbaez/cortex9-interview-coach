@@ -11,7 +11,7 @@ export type SessionState =
   | "ready" | "intro" | "asking" | "listening" | "processing" | "paused" | "closing" | "ended";
 
 export interface AudioFormat {
-  /** Base fija y obligatoria: pcm16le @ 16000 Hz mono. opus es opcional (48000 Hz). */
+  /** Base fija y obligatoria: pcm16le @ 16000 Hz mono. opus es opcional (48000 Hz) y el servidor v1 no lo elige. */
   codec: "pcm16le" | "opus";
   sample_rate: 16000 | 48000;
   channels: 1;
@@ -24,7 +24,14 @@ export const IDLE_TIMEOUT_MS = 45_000;
 export const RECONNECT_GRACE_MS = 120_000;
 export const SUBPROTOCOL = "cx9.live.v1";
 
-/** Sobre común de todo mensaje JSON. `seq` es monótono por dirección y empieza en 1. */
+/**
+ * Sobre común de todo mensaje JSON. `seq` es monótono por dirección y empieza en 1.
+ * Excepciones con `seq: 0` (fuera de la secuencia, no se deduplican ni se reenvían):
+ * `hello` (cliente) y `ack` (servidor). Ver contract.md §5.2.
+ * Un mensaje reenviado tras reconectar conserva su seq original; nunca se renumera.
+ * `session.ready` (y cualquier mensaje nuevo) puede llegar con un seq nuevo ANTES de
+ * los reenvíos: el cliente ordena y deduplica por seq.
+ */
 export interface Envelope<T extends string, D> {
   v: 1;
   type: T;
@@ -38,11 +45,13 @@ export interface Envelope<T extends string, D> {
 
 // ───────────────────────── cliente → servidor ─────────────────────────
 
+/** Siempre con `seq: 0`: no consume secuencia ni cuenta para el dedupe. */
 export type Hello = Envelope<"hello", {
   client: string;
   audio_formats: AudioFormat[]; // en orden de preferencia; debe incluir BASELINE_AUDIO
   tts_delivery: Array<"binary" | "url" | "none">;
-  tts_formats?: Array<"pcm16le" | "wav" | "opus">;
+  /** Solo wav y pcm16le. opus no existe para TTS en v1. */
+  tts_formats?: Array<"pcm16le" | "wav">;
   partials?: boolean;
   resume?: { last_server_seq: number } | null;
 }>;
@@ -56,6 +65,7 @@ export type ControlResume = Envelope<"control.resume", { turn_id?: string }>;
 export type ControlSkip = Envelope<"control.skip", { turn_id: string }>;
 export type ControlEnd = Envelope<"control.end", Record<string, never>>;
 export type ControlRepeat = Envelope<"control.repeat", { turn_id: string }>;
+/** Solo con tts_delivery binary|url. Con tts_delivery=none el cliente NO lo manda y el servidor no lo espera. */
 export type TtsPlayed = Envelope<"tts.played", { utterance_id: string }>;
 export type Ping = Envelope<"ping", { nonce: string }>;
 export type Pong = Envelope<"pong", { nonce: string }>;
@@ -71,7 +81,7 @@ export type SessionReady = Envelope<"session.ready", {
   state: SessionState;
   audio_format: AudioFormat;
   tts_delivery: "binary" | "url" | "none";
-  tts_format?: "pcm16le" | "wav" | "opus";
+  tts_format?: "pcm16le" | "wav";
   heartbeat_ms: 15000;
   idle_timeout_ms: 45000;
   max_inflight_bytes: number;
@@ -85,12 +95,18 @@ export type SessionReady = Envelope<"session.ready", {
 export type Question = Envelope<"question", {
   turn_id: string;
   question_id: string;
-  index: number; // 1-based
+  /** 1-based. kind=intro: 0 y turn_id "t-0" (no espera respuesta); kind=closing: total y turn_id "t-0". */
+  index: number;
   total: number;
   text: string;
   lang: Lang;
   utterance_id: string;
   kind?: "intro" | "main" | "closing" | "repeat";
+  /**
+   * true si es una re-emisión. Por control.repeat: mismo turn_id y question_id, seq nuevo,
+   * sin turn.end. Tras NO_AUDIO o falla de STT: turn.end next=repeat y turn_id nuevo.
+   */
+  repeat?: boolean;
 }>;
 
 export type Followup = Envelope<"followup", {
@@ -101,11 +117,13 @@ export type Followup = Envelope<"followup", {
   probe: Probe;
   text: string;
   utterance_id: string;
+  /** true si es una re-emisión (mismas reglas que Question). Nunca consume repregunta. */
+  repeat?: boolean;
 }>;
 
 export type TtsAudio = Envelope<"tts.audio", {
   utterance_id: string;
-  format: "pcm16le" | "wav" | "opus";
+  format: "pcm16le" | "wav";
   sample_rate: number;
   duration_ms: number;
   chunks: number;
@@ -116,7 +134,7 @@ export type TtsAudio = Envelope<"tts.audio", {
 export type TtsUrl = Envelope<"tts.url", {
   utterance_id: string;
   url: string;
-  format: "wav" | "opus";
+  format: "wav";
   duration_ms: number;
   expires_at: string;
 }>;
@@ -163,6 +181,13 @@ export type SessionEnd = Envelope<"session.end", {
   };
 }>;
 
+/**
+ * Ack periódico de flujo: mientras el estado es `listening` el servidor lo manda cada
+ * 250 ms o cada 32 KB recibidos (lo que pase primero), aunque partials esté apagado.
+ * Siempre `seq: 0`: no entra en la secuencia ni en el replay. `ack` == `data.last_client_seq`.
+ */
+export type Ack = Envelope<"ack", { last_client_seq: number }>;
+
 export type WsErrorCode =
   | "AUTH_FAILED" | "SESSION_NOT_FOUND" | "SESSION_ENDED" | "ALREADY_CONNECTED"
   | "HELLO_REQUIRED" | "INVALID_MESSAGE" | "UNSUPPORTED_MESSAGE" | "UNSUPPORTED_FORMAT"
@@ -182,7 +207,7 @@ export type WsError = Envelope<"error", {
 export type ServerMessage =
   | SessionReady | Question | Followup | TtsAudio | TtsUrl
   | TranscriptPartial | TranscriptFinal | Pause | Resume
-  | TurnEnd | SessionEnd | WsError | Ping | Pong;
+  | TurnEnd | SessionEnd | WsError | Ack | Ping | Pong;
 
 /** Códigos de cierre WebSocket propios (4000-4999). */
 export const CloseCode = {

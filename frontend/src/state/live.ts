@@ -16,6 +16,8 @@ export interface TurnView {
   followupIndex: number | null;
   maxFollowups: number | null;
   probe: Probe | null;
+  /** v1.1: re-emisión (control.repeat o tras NO_AUDIO/falla de STT). */
+  repeat: boolean;
 }
 
 export interface TranscriptEntry {
@@ -36,6 +38,8 @@ export interface LiveState {
   lastIndex: number | null;
   total: number | null;
   tts: 'pending' | 'available' | 'unavailable';
+  /** Entrega de TTS que eligió el servidor en session.ready (con `none` no se manda tts.played). */
+  ttsDelivery: 'binary' | 'url' | 'none' | null;
   transcript: TranscriptEntry[];
   partial: { turnId: string; text: string; revision: number } | null;
   error: { code: WsErrorCode; message: string; fatal: boolean } | null;
@@ -63,6 +67,7 @@ export const initialLive: LiveState = {
   lastIndex: null,
   total: null,
   tts: 'pending',
+  ttsDelivery: null,
   transcript: [],
   partial: null,
   error: null,
@@ -73,13 +78,14 @@ export const initialLive: LiveState = {
 
 export const turnNo = (turnId: string): number => Number(/^t-(\d+)$/.exec(turnId)?.[1] ?? 0);
 
-/** ¿Se puede responder ahora? Intro y cierre no se responden. */
+/** ¿Se puede responder ahora? Intro y cierre (turn_id "t-0") no se responden. */
 export function canAnswer(s: LiveState): boolean {
   return (
     s.conn === 'open' &&
     s.turn !== null &&
     s.turn.kind !== 'intro' &&
     s.turn.kind !== 'closing' &&
+    s.turn.turnId !== 't-0' &&
     (s.server === 'asking' || s.server === 'listening') &&
     !s.recording
   );
@@ -115,7 +121,8 @@ function addInterviewer(s: LiveState, turn: TurnView): LiveState {
     ...s,
     server: 'asking',
     turn,
-    lastIndex: turn.index ?? s.lastIndex,
+    // La intro llega con index 0 y el cierre con index = total (§5.5, v1.1).
+    lastIndex: turn.kind === 'intro' || turn.kind === 'closing' ? s.lastIndex : (turn.index ?? s.lastIndex),
     total: turn.total ?? s.total,
     tts: dup ? s.tts : 'pending',
     partial: null,
@@ -135,6 +142,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
         total: m.data.question_count ?? s.total,
         lastIndex: m.data.question_index ?? s.lastIndex,
         tts: m.data.tts_delivery === 'none' ? 'unavailable' : s.tts,
+        ttsDelivery: m.data.tts_delivery,
       };
     case 'question': {
       const d = m.data;
@@ -142,7 +150,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
         turnId: d.turn_id,
         turnNo: turnNo(d.turn_id),
         questionId: d.question_id,
-        kind: d.kind ?? 'main',
+        kind: d.kind ?? (d.repeat ? 'repeat' : 'main'),
         text: d.text,
         utteranceId: d.utterance_id,
         index: d.index,
@@ -150,6 +158,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
         followupIndex: null,
         maxFollowups: null,
         probe: null,
+        repeat: d.repeat === true || d.kind === 'repeat',
       });
     }
     case 'followup': {
@@ -166,6 +175,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
         followupIndex: d.followup_index,
         maxFollowups: d.max_followups,
         probe: d.probe,
+        repeat: d.repeat === true,
       });
     }
     case 'tts.audio':
@@ -198,6 +208,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
       const next = { ...s, error: { code: m.data.code, message: m.data.message, fatal: m.data.fatal } };
       return m.data.code === 'TTS_UNAVAILABLE' ? { ...next, tts: 'unavailable' } : next;
     }
+    case 'ack':
     case 'ping':
     case 'pong':
       return s;

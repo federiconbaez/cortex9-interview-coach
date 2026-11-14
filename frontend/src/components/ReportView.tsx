@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Ref } from 'react';
 import { ApiError } from '../api/client';
 import { useApi } from '../api/context';
-import { DIMS, type Report as ReportT } from '../api/schema';
+import { DIMS, type Report as ReportT, type TurnScore } from '../api/schema';
 import { useI18n } from '../i18n';
 
 type View =
@@ -187,6 +187,7 @@ export function Report({
                     {t('report.comment')}: {turn.comment}
                   </p>
                 )}
+                <TurnSpeech details={turn.details} />
                 <p className="muted small">{t('report.source', { source: turn.score_source })}</p>
               </div>
             ))}
@@ -261,5 +262,33 @@ export function Report({
         </button>
       </div>
     </article>
+  );
+}
+
+/** Muletillas (con su fuente, v1.1) y pausas largas del STT; campos opcionales del contrato. */
+function TurnSpeech({ details: d }: { details: TurnScore['details'] }) {
+  const { t, formatNumber } = useI18n();
+  const source = d.muletillas_fuente ? t(`report.fillersSource.${d.muletillas_fuente}`) : null;
+  const showFillers = d.muletillas.length > 0 || source !== null;
+  const p = d.pausas;
+  if (!showFillers && !p) return null;
+  return (
+    <ul className="small plain" data-testid="turn-speech">
+      {showFillers && (
+        <li>
+          {d.muletillas.length > 0
+            ? t('report.fillers', { list: d.muletillas.join(', '), rate: formatNumber(d.muletillas_cada_100) })
+            : t('report.fillersNone')}
+          {source && ` (${source})`}
+        </li>
+      )}
+      {p && (
+        <li>
+          {p.cantidad === 0
+            ? t('report.pausesNone')
+            : t('report.pauses', { count: p.cantidad, total: formatNumber(p.total_s), longest: formatNumber(p.mas_larga_s) })}
+        </li>
+      )}
+    </ul>
   );
 }

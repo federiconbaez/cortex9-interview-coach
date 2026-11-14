@@ -45,3 +45,16 @@ test('perfil: validación con foco, guardado con ETag, recarga y borrado', async
   await expect(page.getByTestId('profile-msg')).toHaveText('Perfil borrado.');
   await expect(page.getByLabel('Empresa *')).toHaveCount(0);
 });
+
+test('401 UNAUTHENTICATED a mitad de uso vuelve al login con aviso', async ({ page, request }) => {
+  await resetMock(request, true);
+  await login(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Nueva práctica' })).toBeVisible();
+  // El reset del mock invalida la cookie: la próxima llamada recibe 401 UNAUTHENTICATED.
+  await resetMock(request, true);
+  await page.getByRole('button', { name: 'Historial' }).click();
+  await expect(page.getByRole('alert')).toContainText('Tu sesión de acceso venció. Volvé a ingresar.');
+  await expect(page.getByLabel('Contraseña')).toBeVisible();
+  await expectNoA11yViolations(page);
+});
