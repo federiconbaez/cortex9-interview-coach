@@ -1,6 +1,6 @@
 # Contrato del CORTEX-9 Interview Coach (v1)
 
-Ref: CX9-6174 · Estado: **v1.0, estable para empezar a implementar** · Licencia: Apache-2.0
+Ref: CX9-6174 · Estado: **v1.1, estable** (cambios compatibles sobre v1.0, ver §9) · Licencia: Apache-2.0
 
 Este documento es el contrato entre las tres partes del repo:
 
@@ -110,6 +110,19 @@ En desarrollo el frontend corre en Vite (`http://localhost:5173`) y el backend e
 - Login con límite: 5 intentos fallidos por minuto → `429 RATE_LIMITED` con `Retry-After`.
 - `POST /v1/auth/logout` revoca el token. `GET /v1/auth/me` devuelve `{"user":"local","expires_at":...}`.
 
+### 2.7 Variables de entorno que comparten backend y despliegue
+
+| Variable | Default del backend | Uso |
+|---|---|---|
+| `CX9_HTTP_ADDR` | `:8080` | API, WebSocket y `/metrics` en el mismo puerto |
+| `CX9_DATABASE_URL` | `sqlite://cx9.db` | `sqlite://<ruta>` o `postgres://…` (el esquema elige el motor) |
+| `CX9_LLM_PROVIDER` | `mock` | `openai` · `anthropic` · `xai` · `ollama` · `mock` |
+| `CX9_OLLAMA_URL` | `http://localhost:11434` | URL de Ollama (`OLLAMA_URL` como respaldo). En compose: `http://host.docker.internal:11434` |
+| `CX9_SPEECH_URL` / `CX9_SPEECH_TOKEN` | `http://127.0.0.1:8090` / vacío | Servicio de voz (§6) |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY` | vacías | Solo del entorno; nunca se loguean ni se devuelven |
+
+La lista completa está en `backend/README.md`. El binario es `backend/cmd/coach` (`coach serve`).
+
 ---
 
 ## 3. Mapa de rutas
@@ -160,7 +173,9 @@ Los esquemas completos están en `openapi.yaml`. Acá va la semántica y un ejem
 }
 ```
 
-`degraded` responde `200` (la app funciona con fallback); `down` en `db` o `speech` responde `503`.
+`degraded` responde `200` (la app funciona con fallback); `down` en `db` o `speech` responde `503`. Si el servicio de voz responde `GET /health` con `"status":"degraded"` (p. ej. TTS de respaldo con espeak-ng), es **usable**: `/v1/ready` lo informa como `checks.speech.status = "degraded"`, el global queda `degraded` y responde `200`.
+
+`/metrics` va en el **mismo puerto** que la API (`:8080`). El despliegue solo publica ese puerto en `127.0.0.1` o en la red interna de compose y el proxy del frontend no reenvía `/metrics`.
 
 `GET /metrics` (texto Prometheus). Métricas mínimas que el backend expone:
 
@@ -453,10 +468,10 @@ En `lang: en`, cada bloque trae `english` (`grammar[]`, `tips[]`, `low_confidenc
 
 ### 5.1 Handshake y autenticación
 
-1. (Opcional) `POST /v1/sessions/{id}/live-ticket` → `{"ticket":"…","expires_at":"…","url":"/v1/sessions/{id}/live?ticket=…"}`. Ticket de un solo uso, 60 s, atado a la sesión. Sirve si la cookie no viaja (p. ej. puertos distintos sin proxy).
+1. **(Opcional)** `POST /v1/sessions/{id}/live-ticket` → `{"ticket":"…","expires_at":"…","url":"/v1/sessions/{id}/live?ticket=…"}`. Ticket de un solo uso, 60 s, atado a la sesión. Sirve si la cookie no viaja (p. ej. puertos distintos sin proxy). Un cliente del **mismo origen** no lo necesita: abre el WS directo y viaja la cookie `cx9_session`.
 2. `GET /v1/sessions/{id}/live` con `Upgrade: websocket` y `Sec-WebSocket-Protocol: cx9.live.v1`. Auth: cookie `cx9_session` **o** `?ticket=`. Se valida `Origin` (§2.5).
 3. Errores **antes** del upgrade son HTTP problem+json: `401`, `403`, `404`, `409` (sesión `ended`/`completed`), `426` (sin subprotocolo).
-4. Tras el upgrade, el cliente manda `hello` en ≤ 5 s (si no: `error HELLO_REQUIRED` + cierre `4400`).
+4. Tras el upgrade, el cliente manda `hello` (siempre con `seq: 0`, ver §5.2) en ≤ 5 s (si no: `error HELLO_REQUIRED` + cierre `4400`).
 5. El servidor responde `session.ready` con el formato de audio elegido, cómo va el TTS, heartbeat y límites. Desde ahí, el servidor conduce: `question` → (`tts.*`) → el usuario responde → `transcript.*` → `turn.end` → `followup` o `question` … → `session.end`.
 6. Una sola conexión activa por sesión: una conexión nueva válida reemplaza a la anterior (la vieja recibe cierre `4009 REPLACED`).
 
@@ -469,13 +484,17 @@ Todo mensaje de texto es un objeto JSON:
 ```
 
 - `seq`: entero ≥ 1, **monótono y sin huecos por dirección** (cliente→servidor y servidor→cliente son contadores independientes). Los **frames binarios consumen `seq`** de la misma secuencia de su dirección.
+- **Excepciones con `seq: 0`**, fuera de la secuencia: `hello` (cliente→servidor) y `ack` (servidor→cliente, §5.8). No consumen número, no cuentan para el dedupe y no entran en el buffer de reenvío. El servidor ignora el `seq` de cualquier `hello`.
+- **Dedupe:** el servidor descarta solo los mensajes con `seq <= last_client_seq` (duplicados, sin error). Un `seq` mayor a `last_client_seq + 1` es un hueco → `error SEQ_OUT_OF_ORDER` con `ref_seq = last_client_seq + 1`.
+- **Nunca se renumera:** un mensaje reenviado (por cualquiera de los dos lados) conserva su `seq` original.
+- **Orden de llegada tras reconectar:** `session.ready` (y cualquier mensaje nuevo del servidor) lleva un `seq` nuevo y puede llegar **antes** que los reenvíos, que tienen `seq` menores. El cliente ordena y deduplica por `seq` (procesa cada `seq` una sola vez).
 - `ack` (solo servidor→cliente, opcional en cada mensaje): último `seq` del cliente **procesado de forma contigua**. Lo usa el cliente para backpressure (§5.8) y para reenviar tras reconexión (§5.9).
 - `session_id` debe coincidir con la ruta; si no, `error INVALID_MESSAGE`.
 - Tamaño máximo de un mensaje de texto: 64 KB.
 
 ### 5.3 Formato de audio: decisión
 
-**Decisión: frames binarios con un header propio de 20 bytes; formato base fijo PCM16LE, 16 kHz, mono; Opus opcional por negociación.**
+**Decisión: frames binarios con un header propio de 20 bytes; formato base fijo PCM16LE, 16 kHz, mono. Opus queda reservado en el header pero el servidor v1 no lo elige.**
 
 Por qué binario y no base64:
 
@@ -490,7 +509,7 @@ Por qué PCM16 16 kHz mono como base:
 - Es trivial de producir en el navegador (AudioWorklet + downsample 48k→16k) y de testear (archivos .raw deterministas).
 - Costo: 32 KB/s ≈ 256 kbps, irrelevante en localhost (la app es local).
 
-Negociación: el cliente lista en `hello.data.audio_formats` lo que puede mandar, en orden de preferencia, e **incluye siempre** `{"codec":"pcm16le","sample_rate":16000,"channels":1}`. El servidor elige y lo confirma en `session.ready.data.audio_format`. En v1 el backend acepta `opus` (48 kHz mono, paquetes Opus crudos de 20 ms, uno o varios por frame) solo si el servicio de voz declara soporte en `/health`; si no, elige PCM16. Si el cliente no ofrece PCM16 ni un formato soportado → `error UNSUPPORTED_FORMAT` fatal.
+Negociación: el cliente lista en `hello.data.audio_formats` lo que puede mandar, en orden de preferencia, e **incluye siempre** `{"codec":"pcm16le","sample_rate":16000,"channels":1}`. El servidor elige y lo confirma en `session.ready.data.audio_format`. En v1 el backend **siempre elige PCM16** aunque el cliente ofrezca `opus` (reservado para una versión futura). Si el cliente no ofrece PCM16 ni un formato soportado → `error UNSUPPORTED_FORMAT` fatal.
 
 Chunks: recomendado 100 ms (3200 bytes PCM16); permitido 20-1000 ms; `payload_len ≤ 32000` bytes.
 
@@ -516,7 +535,7 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 
 | type | Cuándo | data |
 |---|---|---|
-| `hello` | Primer mensaje | `client`, `audio_formats[]`, `tts_delivery[]` (`binary`/`url`/`none`), `tts_formats[]`, `partials`, `resume{last_server_seq}` |
+| `hello` | Primer mensaje, siempre `seq: 0` | `client`, `audio_formats[]`, `tts_delivery[]` (`binary`/`url`/`none`), `tts_formats[]` (`wav`/`pcm16le`), `partials`, `resume{last_server_seq}` |
 | *(binario kind 0x01)* `audio.chunk` | Mientras el usuario habla, solo en estado `listening` | header §5.4 + PCM16 |
 | `audio.chunk` (JSON, fallback) | Igual, si no puede binario | `turn_id`, `chunk_index`, `audio_b64` |
 | `audio.end` | Fin del turno de voz (VAD del cliente o push-to-talk) | `turn_id`, `chunks`, `bytes`, `duration_ms` |
@@ -526,7 +545,7 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 | `control.skip` | Saltar la pregunta actual (y sus repreguntas) | `turn_id` |
 | `control.repeat` | Repetir la pregunta actual (como `/repetir`) | `turn_id` |
 | `control.end` | Terminar la sesión y armar el informe con lo respondido | `{}` |
-| `tts.played` | Terminó de reproducir una intervención (el servidor pasa a `listening`) | `utterance_id` |
+| `tts.played` | Terminó de reproducir una intervención (el servidor pasa a `listening`). **Solo** con `tts_delivery` `binary` o `url`: con `none` el cliente no lo manda y el servidor no lo espera (pasa a `listening` al mandar la pregunta) | `utterance_id` |
 | `ping` / `pong` | Heartbeat de aplicación | `nonce` |
 
 **Servidor → cliente**
@@ -534,10 +553,10 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 | type | Cuándo | data |
 |---|---|---|
 | `session.ready` | Respuesta a `hello` | `state`, `audio_format`, `tts_delivery`, `tts_format`, `heartbeat_ms` (15000), `idle_timeout_ms` (45000), `max_inflight_bytes`, `max_turn_ms`, `resumed`, `last_client_seq`, `question_index`, `question_count` |
-| `question` | Nueva pregunta principal (también intro/cierre/repetición con `kind`) | `turn_id`, `question_id`, `index`, `total`, `text`, `lang`, `utterance_id`, `kind` |
-| `followup` | Repregunta | `turn_id`, `question_id`, `followup_index` (1 o 2), `max_followups` (≤ 2), `probe`, `text`, `utterance_id` |
-| `tts.audio` | Audio de la intervención por WS; le siguen `chunks` frames binarios kind 0x02 | `utterance_id`, `format`, `sample_rate`, `duration_ms`, `chunks`, `bytes`, `sha256?` |
-| `tts.url` | Alternativa: el cliente baja el audio por HTTP | `utterance_id`, `url`, `format`, `duration_ms`, `expires_at` |
+| `question` | Nueva pregunta principal (también intro/cierre/repetición con `kind`) | `turn_id`, `question_id`, `index`, `total`, `text`, `lang`, `utterance_id`, `kind`, `repeat?` |
+| `followup` | Repregunta | `turn_id`, `question_id`, `followup_index` (1 o 2), `max_followups` (≤ 2), `probe` (incluye `other`), `text`, `utterance_id`, `repeat?` |
+| `tts.audio` | Audio de la intervención por WS; le siguen `chunks` frames binarios kind 0x02 | `utterance_id`, `format` (`wav`/`pcm16le`), `sample_rate`, `duration_ms`, `chunks`, `bytes`, `sha256?` |
+| `tts.url` | Alternativa: el cliente baja el audio por HTTP | `utterance_id`, `url`, `format` (`wav`), `duration_ms`, `expires_at` |
 | `transcript.partial` | Transcripción parcial de la respuesta del usuario | `turn_id`, `text`, `revision`, `audio_ms` |
 | `transcript.final` | Transcripción final del turno | `turn_id`, `text`, `duration_ms`, `confidence`, `low_confidence[]`, `source` (`stt`/`text`) |
 | `pause` | Pausa (pedida, tiempo para pensar o reconexión) | `reason`, `resume_after_ms?`, `max_pause_ms` |
@@ -545,14 +564,17 @@ PCM16 va en **little-endian** dentro del payload (el header es big-endian; son c
 | `turn.end` | Cierre del turno con qué sigue | `turn_id`, `reason`, `next` (`followup`/`question`/`repeat`/`end`), `followups_used`, `max_followups` |
 | `session.end` | Fin de la sesión con resumen | `reason`, `report_url`, `summary{questions_asked, questions_answered, followups_asked, skipped, total_answer_ms, report_status}` |
 | `error` | Error | `code`, `message`, `fatal`, `retryable`, `ref_seq?`, `close_code?` |
+| `ack` | Ack periódico en `listening` (§5.8), siempre `seq: 0` y con `ack` en el sobre | `last_client_seq` |
 | `ping` / `pong` | Heartbeat | `nonce` |
 
 Reglas del motor que el cliente puede asumir:
 
 - **Una pregunta por turno.** Nunca llegan dos `question`/`followup` sin un `turn.end` en el medio.
 - **Repreguntas: máximo 2 por pregunta.** `followup_index` es 1 o 2; `followups_used` en `turn.end` cuenta las ya hechas. Con `max_followups` 0 no hay repreguntas. El tope lo impone el servidor.
-- `transcript.partial` es opcional (si `hello.partials=false` no se manda) y **no** es una sugerencia: es la propia voz del usuario. Se genera re-transcribiendo el audio acumulado con `POST /stt` cada ~1,5 s mientras dura el turno (el servicio de voz no es streaming); `revision` crece y cada parcial **reemplaza** al anterior. El final siempre llega y es el que cuenta.
-- Si el audio del turno es silencio o la transcripción queda vacía: `error NO_AUDIO` (no fatal), `turn.end{reason:"no_audio", next:"repeat"}` y `question{kind:"repeat"}` con "No te escuché bien. ¿Podés repetir tu respuesta?" (sin consumir repreguntas).
+- `transcript.partial` es opcional (si `hello.partials=false` no se manda) y **no** es una sugerencia: es la propia voz del usuario. Se genera re-transcribiendo con `POST /stt?partial=true` **solo los últimos 12 s** del turno cada ~1,5 s (el servicio de voz no es streaming); `revision` crece y cada parcial **reemplaza** al anterior. El final se transcribe con el turno completo, siempre llega y es el que cuenta. Si el servicio de voz está ocupado con un parcial (`503`), ese parcial se saltea.
+- Si el audio del turno es silencio o la transcripción queda vacía: `error NO_AUDIO` (no fatal), `turn.end{reason:"no_audio", next:"repeat"}` y se re-emite la pregunta vigente con `turn_id` nuevo y `repeat: true` (`question{kind:"repeat"}` o el mismo `followup` con su `followup_index`), sin consumir repreguntas. El mensaje "No te escuché bien. ¿Podés repetir tu respuesta?" va en el `error`.
+- `control.repeat` re-emite **la misma** intervención vigente: mismo `turn_id`, mismo `question_id`, `utterance_id` y `seq` nuevos y `repeat: true` (`question` con `kind:"repeat"`, o el `followup` con el mismo `followup_index` y `probe`). **No** hay `turn.end` y **no** consume repregunta. Si había audio parcial de ese turno, se descarta.
+- `index` de `question`: 1-based para preguntas; la intro usa `index: 0` y el cierre `index: total`, ambos con `turn_id: "t-0"` (no esperan respuesta). El cierre va antes de `session.end` y el servidor no espera `tts.played` para él.
 - `max_turn_ms` (por defecto 300000): al superarlo el servidor cierra el turno como si hubiera llegado `audio.end` (`turn.end.reason = "max_duration"`) y descarta chunks posteriores de ese turno.
 
 ### 5.6 Diagrama de estados de la sesión (WS)
@@ -642,13 +664,14 @@ sequenceDiagram
 Cliente → servidor (audio):
 
 - `session.ready.data.max_inflight_bytes` (por defecto 96000 ≈ 3 s de PCM16) es la ventana: bytes de audio enviados con `seq > ack` no pueden superarla.
+- **Acks periódicos:** mientras el estado es `listening`, el servidor manda `{"type":"ack","seq":0,"ack":N,"data":{"last_client_seq":N}}` cada **250 ms** o cada **32 KB** de audio recibidos, lo que pase primero, **aunque `partials` esté apagado** (y solo si `N` avanzó). Así la ventana se libera sin depender de otros mensajes: 10 s de audio continuo sin parciales no frenan el envío.
 - El cliente además mira `WebSocket.bufferedAmount`: si supera `max_inflight_bytes`, deja de mandar y **acumula localmente** (no descarta: el audio es la respuesta del usuario), y reanuda cuando baja.
 - Si el servidor tiene más de 2 × ventana sin procesar de esa conexión, manda `error BACKPRESSURE` (no fatal, `retryable: true`); si persiste 10 s, cierra con `4008`. El cliente reconecta con resume y reenvía lo no confirmado.
 - Si el STT va lento, el servidor sigue aceptando (dentro de la ventana) y retrasa `transcript.final`; nunca descarta audio aceptado.
 
 Servidor → cliente:
 
-- Cola de salida acotada por conexión (256 mensajes o 1 MB). Si se llena: primero se **fusionan los `transcript.partial`** (se manda solo el último), después se pausa el envío de frames TTS (el cliente puede pedir `tts.url`). `question`, `followup`, `transcript.final`, `turn.end`, `session.end` y `error` **nunca se descartan**. Si aun así se llena → cierre `4008` y el cliente reconecta con resume.
+- Cola de salida acotada por conexión (256 mensajes o 1 MB). Si se va llenando (> 64 mensajes o 512 KB): primero **se dejan de generar `transcript.partial`** (se saltean; nunca se encolan a medias), después el TTS de las siguientes intervenciones va por `tts.url` si el cliente lo aceptó. `question`, `followup`, `transcript.final`, `turn.end`, `session.end` y `error` **nunca se descartan**. Si aun así se llena → cierre `4008` y el cliente reconecta con resume.
 
 ### 5.9 Heartbeat, timeouts y reconexión con resume
 
@@ -656,16 +679,16 @@ Heartbeat (intervalo fijo, informado en `session.ready`):
 
 - `heartbeat_ms = 15000`: el **servidor** manda ping de control WebSocket (RFC 6455; el navegador responde solo) **y** el **cliente** manda `ping{nonce}` JSON cada 15 s (los navegadores no pueden mandar pings de control); el servidor responde `pong{nonce}` con el mismo nonce. El servidor también puede mandar `ping` JSON y el cliente debe responder `pong`.
 - `idle_timeout_ms = 45000`: si el servidor no recibe nada (ni pong de control, ni JSON, ni binario) en 45 s, cierra `4011`. Si el cliente no recibe nada en 45 s, considera la conexión muerta y reconecta.
-- `ping`/`pong` consumen `seq` como cualquier mensaje.
+- `ping`/`pong` consumen `seq` como cualquier mensaje (solo `hello` y `ack` van con `seq: 0`).
 
 Reconexión:
 
 - Al caerse el WS la sesión pasa a `detached` (REST) y se mantiene **120 s** (`RECONNECT_GRACE_MS`). El temporizador de la pregunta se congela (equivale a `pause{reason:"reconnect"}`).
 - El cliente reconecta con backoff exponencial con jitter: 0,5 s, 1 s, 2 s, 4 s, 8 s (tope 8 s) hasta agotar la gracia.
 - En el nuevo `hello` manda `resume: {"last_server_seq": N}` (el último `seq` del servidor que procesó).
-- El servidor guarda un buffer de reenvío de los **últimos 512 mensajes o 60 s** por sesión (incluye frames TTS). Si tiene todo desde `N+1`, contesta `session.ready{resumed:true, last_client_seq:M}` y **reenvía** los mensajes `seq > N` con su `seq` original. Si no los tiene, `error RESUME_GAP` (no fatal) y `session.ready{resumed:false}` seguido del estado actual (la pregunta vigente se reenvía como `question` o `followup`).
+- El servidor guarda un buffer de reenvío de los **últimos 512 mensajes o 60 s** por sesión (incluye frames TTS; no incluye `ack` ni errores fatales). Si tiene todo desde `N+1`, contesta `session.ready{resumed:true, last_client_seq:M}` (con `seq` nuevo, ver §5.2) y **reenvía** los mensajes `seq > N` con su `seq` original. Si no los tiene, `error RESUME_GAP` (no fatal) y `session.ready{resumed:false}` seguido del estado actual (la pregunta vigente se reenvía como `question` o `followup`).
 - `last_client_seq: M` le dice al cliente qué recibió el servidor: el cliente **reenvía sus mensajes `seq > M`** (incluido el audio guardado). El servidor ignora duplicados.
-- La secuencia del servidor **no se reinicia** al reconectar; la del cliente tampoco (sigue desde su último seq).
+- La secuencia del servidor **no se reinicia** al reconectar; la del cliente tampoco cuando manda `resume` (sigue desde su último seq). Un `hello` con `resume: null` es un cliente nuevo: su secuencia empieza otra vez en 1.
 - Si vence la gracia: la sesión termina con `ended_reason: "disconnected"` y el informe se arma con lo respondido.
 
 ### 5.10 Pausas
@@ -705,10 +728,10 @@ Cierres: `1000` normal (tras `session.end`), `4001`, `4003` (Origin), `4004`, `4
 Los ejemplos omiten `v`, `ts` y `session_id` cuando no aportan; en el cable **siempre** van.
 
 ```json
-{"v":1,"type":"hello","seq":1,"ts":"2026-11-14T07:41:00.000Z","session_id":"0193a1b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b","data":{"client":"cx9-frontend/0.1.0","audio_formats":[{"codec":"pcm16le","sample_rate":16000,"channels":1,"frame_ms":100}],"tts_delivery":["binary","url"],"tts_formats":["wav","pcm16le"],"partials":true,"resume":null}}
+{"v":1,"type":"hello","seq":0,"ts":"2026-11-14T07:41:00.000Z","session_id":"0193a1b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b","data":{"client":"cx9-frontend/0.1.0","audio_formats":[{"codec":"pcm16le","sample_rate":16000,"channels":1,"frame_ms":100}],"tts_delivery":["binary","url"],"tts_formats":["wav","pcm16le"],"partials":true,"resume":null}}
 ```
 ```json
-{"v":1,"type":"session.ready","seq":1,"ts":"2026-11-14T07:41:00.020Z","session_id":"0193a1b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b","ack":1,"data":{"state":"ready","audio_format":{"codec":"pcm16le","sample_rate":16000,"channels":1,"frame_ms":100},"tts_delivery":"binary","tts_format":"wav","heartbeat_ms":15000,"idle_timeout_ms":45000,"max_inflight_bytes":96000,"max_turn_ms":300000,"resumed":false,"last_client_seq":1,"question_index":0,"question_count":5}}
+{"v":1,"type":"session.ready","seq":1,"ts":"2026-11-14T07:41:00.020Z","session_id":"0193a1b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b","data":{"state":"ready","audio_format":{"codec":"pcm16le","sample_rate":16000,"channels":1,"frame_ms":100},"tts_delivery":"binary","tts_format":"wav","heartbeat_ms":15000,"idle_timeout_ms":45000,"max_inflight_bytes":96000,"max_turn_ms":300000,"resumed":false,"last_client_seq":0,"question_index":0,"question_count":5}}
 ```
 ```json
 {"type":"question","seq":2,"data":{"turn_id":"t-1","question_id":"recorrido","index":1,"total":5,"text":"Para empezar, contame brevemente tu recorrido profesional.","lang":"es","utterance_id":"u-1","kind":"main"}}
@@ -721,14 +744,17 @@ Frames binarios siguientes: `43 58 01 02 | 00 00 00 04 | 00 00 00 01 | 00 00 00 
 {"type":"tts.url","seq":4,"data":{"utterance_id":"u-1","url":"/v1/sessions/0193a1b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b/tts/u-1","format":"wav","duration_ms":3420,"expires_at":"2026-11-14T08:41:00Z"}}
 ```
 ```json
-{"type":"tts.played","seq":2,"data":{"utterance_id":"u-1"}}
+{"type":"tts.played","seq":1,"data":{"utterance_id":"u-1"}}
 ```
-Audio del cliente (100 ms, turno 1, chunk 0, seq 3): `43 58 01 01 | 00 00 00 03 | 00 00 00 01 | 00 00 00 00 | 01 | 00 | 0C 80` + 3200 bytes PCM16LE.
+Audio del cliente (100 ms, turno 1, chunk 0, seq 2): `43 58 01 01 | 00 00 00 02 | 00 00 00 01 | 00 00 00 00 | 01 | 00 | 0C 80` + 3200 bytes PCM16LE.
 ```json
-{"type":"audio.chunk","seq":3,"data":{"turn_id":"t-1","chunk_index":0,"audio_b64":"AAABAAIA…"}}
+{"type":"audio.chunk","seq":2,"data":{"turn_id":"t-1","chunk_index":0,"audio_b64":"AAABAAIA…"}}
 ```
 ```json
 {"type":"transcript.partial","seq":9,"ack":18,"data":{"turn_id":"t-1","text":"Eh, bueno, trabajé en Telecom","revision":1,"audio_ms":1600}}
+```
+```json
+{"type":"ack","seq":0,"ack":12,"data":{"last_client_seq":12}}
 ```
 ```json
 {"type":"audio.end","seq":250,"data":{"turn_id":"t-1","chunks":246,"bytes":787200,"duration_ms":24600}}
@@ -780,12 +806,12 @@ Audio del cliente (100 ms, turno 1, chunk 0, seq 3): `43 58 01 01 | 00 00 00 03 
 ```
 Reconexión:
 ```json
-{"type":"hello","seq":301,"data":{"client":"cx9-frontend/0.1.0","audio_formats":[{"codec":"pcm16le","sample_rate":16000,"channels":1}],"tts_delivery":["binary"],"partials":true,"resume":{"last_server_seq":44}}}
+{"type":"hello","seq":0,"data":{"client":"cx9-frontend/0.1.0","audio_formats":[{"codec":"pcm16le","sample_rate":16000,"channels":1}],"tts_delivery":["binary"],"partials":true,"resume":{"last_server_seq":44}}}
 ```
 ```json
 {"type":"session.ready","seq":46,"ack":298,"data":{"state":"listening","audio_format":{"codec":"pcm16le","sample_rate":16000,"channels":1,"frame_ms":100},"tts_delivery":"binary","heartbeat_ms":15000,"idle_timeout_ms":45000,"max_inflight_bytes":96000,"max_turn_ms":300000,"resumed":true,"last_client_seq":298,"question_index":3,"question_count":5}}
 ```
-(Después el servidor reenvía su `seq 45`, y el cliente reenvía sus `seq 299-300`.)
+(Después el servidor reenvía su `seq 45` —llega después del `session.ready` con `seq 46`; el cliente ordena por `seq`—, y el cliente reenvía sus `seq 299-300` con esos mismos números.)
 
 ### 5.13 Tipos TypeScript
 
@@ -793,8 +819,8 @@ Copiar `docs/ws-types.ts` (union `ClientMessage` / `ServerMessage` discriminada 
 
 ```ts
 export interface Envelope<T extends string, D> { v: 1; type: T; seq: number; ts: string; session_id: string; ack?: number; data: D; }
-export type Followup = Envelope<"followup", { turn_id: string; question_id: string; followup_index: 1 | 2; max_followups: 0 | 1 | 2; probe: Probe; text: string; utterance_id: string }>;
-export type ServerMessage = SessionReady | Question | Followup | TtsAudio | TtsUrl | TranscriptPartial | TranscriptFinal | Pause | Resume | TurnEnd | SessionEnd | WsError | Ping | Pong;
+export type Followup = Envelope<"followup", { turn_id: string; question_id: string; followup_index: 1 | 2; max_followups: 0 | 1 | 2; probe: Probe; text: string; utterance_id: string; repeat?: boolean }>;
+export type ServerMessage = SessionReady | Question | Followup | TtsAudio | TtsUrl | TranscriptPartial | TranscriptFinal | Pause | Resume | TurnEnd | SessionEnd | WsError | Ack | Ping | Pong;
 export type ClientMessage = Hello | AudioChunkJson | AudioEnd | AnswerText | ControlPause | ControlResume | ControlSkip | ControlEnd | ControlRepeat | TtsPlayed | Ping | Pong;
 ```
 
@@ -802,7 +828,7 @@ export type ClientMessage = Hello | AudioChunkJson | AudioEnd | AnswerText | Con
 
 ## 6. Contrato HTTP backend → servicio de voz (`/speech`)
 
-- Base URL: `CX9_SPEECH_URL` (por defecto `http://speech:8090` en compose, `http://127.0.0.1:8090` sin Docker). **Solo red interna**; el navegador nunca lo llama.
+- Base URL: `CX9_SPEECH_URL` (`http://speech:8090` en compose; por defecto del backend `http://127.0.0.1:8090` sin Docker). **Solo red interna**; el navegador nunca lo llama.
 - Sin auth en la red interna de compose; si se expone fuera, `Authorization: Bearer $CX9_SPEECH_TOKEN` (el backend lo manda si está definido).
 - Errores en `application/problem+json` (mismo formato §2.3). Header `X-Request-Id` propagado.
 - Las dos operaciones son **funciones puras** del input → reintentar es seguro.
@@ -846,6 +872,11 @@ Respuesta `200 application/json`:
 - `duration_s`: duración real del audio recibido (para PCM16 16 kHz = `bytes / 32000`), no la del habla.
 - `confidence` 0-1: promedio de `confidence` de las palabras ponderado por duración (`null` si el motor no la da). El backend marca `low_confidence` las palabras con `confidence < 0.5` y longitud > 2 (regla de interview-sim).
 - `segments[].words` vacío si `word_confidence=false`.
+- **Extensiones opcionales** (el backend las tolera y las usa si vienen; si faltan, detecta muletillas en el texto):
+  - `segments[].words[].is_filler` (bool): la palabra es muletilla.
+  - `fillers`: `[{ "text": "eh", "start_s": 0.0, "end_s": 0.3 }]` y `filler_count` (entero).
+  - `pauses`: `[{ "start_s": 2.1, "end_s": 3.0, "duration_s": 0.9 }]`, huecos largos entre palabras.
+  - El backend usa `fillers` para la dimensión `muletillas` (`details.muletillas_fuente = "stt"`) y `pauses` para `details.pausas` y `Turn.pauses` (`{cantidad, total_s, mas_larga_s}`; `null` si no vienen).
 
 ### 6.2 `POST /tts`
 
@@ -860,13 +891,13 @@ Petición `application/json`:
 | `text` | 1-2000 chars (`422` si no) |
 | `language` | `es` \| `en` |
 | `voice` | Opcional; id de `GET /voices`. Si falta, la voz por defecto del idioma. Desconocida → `422` `VOICE_NOT_FOUND` |
-| `format` | `wav` (por defecto) \| `pcm16le` \| `opus` (si `/health` lo declara) |
+| `format` | `wav` (por defecto) \| `pcm16le`. Cualquier otro (incluido `opus`) → `422` `VALIDATION_FAILED` |
 | `sample_rate` | Opcional; por defecto la nativa de la voz |
 | `speed` | 0.5-2.0; el backend manda 0.85 en `en` (habla más lento, como interview-sim) |
 
 Respuesta `200` con el audio en el cuerpo:
 
-- `Content-Type`: `audio/wav` · `audio/L16; rate=<sr>; channels=1` · `audio/ogg; codecs=opus`
+- `Content-Type`: `audio/wav` · `audio/L16; rate=<sr>; channels=1`
 - Headers: `X-Audio-Duration-Ms`, `X-Sample-Rate`, `X-Voice`, `X-Engine` (`piper`/`espeak-ng`/`mock`)
 
 ### 6.3 `GET /health`
@@ -881,7 +912,7 @@ Respuesta `200` con el audio en el cuerpo:
 }
 ```
 
-`status`: `ok` | `degraded` (p. ej. TTS cayó a espeak) | `down` (`503`). El backend lo usa para `/v1/ready`, para decidir si acepta Opus y para `GET /v1/languages`.
+`status`: `ok` | `degraded` (p. ej. TTS cayó a espeak; **usable**, el backend sigue y `/v1/ready` lo informa como `degraded`) | `down` (`503`). El backend lo usa para `/v1/ready` y para `GET /v1/languages`.
 
 ### 6.4 `GET /voices`
 
@@ -894,7 +925,8 @@ Respuesta `200` con el audio en el cuerpo:
 | Operación | Connect | Timeout total | Reintentos |
 |---|---|---|---|
 | `POST /stt` final | 2 s | `min(60 s, 10 s + 0,5 × duración del audio)` | 1 reintento con backoff 300 ms ± 100 ms ante error de conexión, `502`, `503`, `504`. Nunca ante `4xx` |
-| `POST /stt` parcial | 2 s | 5 s | 0 (se descarta el parcial; no se reintenta) |
+| `POST /stt` parcial | 2 s | 5 s | 0. Manda solo los **últimos 12 s** del turno cada ~1,5 s. Si el servicio responde `503` (ocupado) o falla, el parcial **se saltea**: sin reintento, sin `error` al cliente y sin contar para el breaker |
+| `POST /stt` final | | | Manda el turno **completo** |
 | `POST /tts` | 2 s | 15 s | 1 reintento como STT |
 | `GET /health` | 1 s | 2 s | 0 |
 
@@ -907,11 +939,12 @@ Respuesta `200` con el audio en el cuerpo:
 | status | code | Cuándo |
 |---|---|---|
 | 400 | `BAD_REQUEST` | Query o JSON mal formado |
+| 401 | `UNAUTHENTICATED` | Falta o no coincide `Authorization: Bearer $CX9_SPEECH_TOKEN` (cuando el servicio lo exige) |
 | 413 | `PAYLOAD_TOO_LARGE` | > 600 s o > 20 MB |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Content-Type de audio no soportado |
 | 422 | `NO_AUDIO` / `VALIDATION_FAILED` / `VOICE_NOT_FOUND` / `UNSUPPORTED_LANGUAGE` | |
 | 500 | `INTERNAL` | |
-| 503 | `MODEL_LOADING` / `DEPENDENCY_UNAVAILABLE` | Con `Retry-After` |
+| 503 | `MODEL_LOADING` / `DEPENDENCY_UNAVAILABLE` / ocupado | Con `Retry-After`. Un `/stt?partial=true` ocupado responde `503` inmediato |
 
 ### 6.7 Modo mock determinista (tests sin red ni modelos)
 
@@ -922,7 +955,7 @@ Se activa con `CX9_SPEECH_MODE=mock` al arrancar el servicio (`/health` devuelve
 - Si viene el header `X-Mock-Transcript: <texto URL-encoded>`, devuelve ese texto (así los tests e2e controlan respuestas, con muletillas y números).
 - Si no, `text = "respuesta simulada " + primeros 8 hex del SHA-256 del cuerpo` (`"simulated answer …"` si `language=en`).
 - `duration_s = bytes / 32000` para L16 16 kHz (o la del header WAV), redondeado a 3 decimales.
-- Un único segmento `[0, duration_s]`; palabras = `text` separado por espacios, con tiempos repartidos uniformemente y `confidence = 0.9`, salvo palabras que empiezan con `?` (p. ej. `?Telecom`), que van con `0.3` y sin el `?` (para probar `low_confidence`).
+- Un único segmento `[0, duration_s]`; palabras = `text` separado por espacios, con tiempos repartidos uniformemente y `confidence = 0.9`, salvo palabras que empiezan con `?` (p. ej. `?Telecom`), que van con `0.3` y sin el `?` (para probar `low_confidence`). El `?` **puede quedar en `text`**: los tests no deben depender de que se quite.
 - `confidence` = promedio; `engine: "mock"`, `model: "mock"`, `processing_ms: 0`.
 - Audio vacío o < 100 ms → `422 NO_AUDIO` (igual que real). Header `X-Mock-Fail: 503|504|timeout` fuerza el error para probar reintentos y breaker (`timeout` = no responde hasta que corte el cliente).
 
@@ -954,3 +987,11 @@ El backend tiene su **propio fake** en Go que implementa este mismo contrato en 
 - [ ] Resume: tras cortar y reconectar con `last_server_seq`, el cliente recibe los mensajes faltantes con su `seq` original y sin duplicar turnos.
 - [ ] El mock de voz da la misma salida para la misma entrada.
 - [ ] Header binario: `decodeFrame(encodeFrame(h, p))` es identidad; `payload_len` inconsistente se rechaza.
+
+---
+
+## 9. Cambios desde v1.0 (compatibles)
+
+- Servicio de voz: `/stt` suma las extensiones opcionales `fillers`, `filler_count`, `pauses` y `words[].is_filler` (§6.1); `/tts` solo `wav`/`pcm16le` y `422` para `opus` (§6.2); un parcial ocupado da `503` inmediato y el backend lo saltea (§6.5); `degraded` en `/health` es usable (§6.3, §4.1); `401 UNAUTHENTICATED` (§6.6); el `?` del mock puede quedar en `text` (§6.7). Los parciales mandan los últimos 12 s; el final, el turno completo.
+- WS: `hello` y el nuevo `ack` van con `seq: 0` fuera de la secuencia; el dedupe descarta solo `seq <= last_client_seq` y nada se renumera; `session.ready` puede llegar antes que los reenvíos (§5.2). Acks periódicos cada 250 ms o 32 KB en `listening` (§5.8). `opus` sale de los formatos de TTS. `probe` suma `other`. Con `tts_delivery=none` no hay `tts.played`. `control.repeat` re-emite con `repeat: true`, mismo `turn_id`/`question_id`, sin `turn.end` y sin consumir repregunta (§5.5). Intro `index: 0` y cierre `index: total` con `turn_id "t-0"`.
+- REST: `live-ticket` es opcional (§5.1). Campos opcionales nuevos: `Turn.stt_fillers`, `Turn.pauses`, `details.pausas`, `details.muletillas_fuente`. `/metrics` en el mismo puerto que la API.

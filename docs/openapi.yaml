@@ -52,6 +52,11 @@ paths:
       tags: [ops]
       operationId: getReady
       summary: Readiness (base de datos, servicio de voz, proveedor LLM por defecto)
+      description: |
+        `status` es `ok`, `degraded` o `down`. Si el servicio de voz responde `/health` con
+        `degraded` (por ejemplo, TTS de respaldo), la dependencia es usable: se informa como
+        `checks.speech.status = degraded`, el global queda `degraded` y la respuesta es 200.
+        Solo `down` en la base o en el servicio de voz devuelve 503.
       security: []
       responses:
         '200':
@@ -69,7 +74,7 @@ paths:
       tags: [ops]
       operationId: getMetrics
       summary: Métricas Prometheus (formato de exposición de texto). Sin versionar.
-      description: Solo escucha en 127.0.0.1 o en la red interna de docker-compose. Sin auth.
+      description: Mismo puerto que la API (:8080). El despliegue solo lo publica en 127.0.0.1 o en la red interna de docker-compose y el proxy del frontend no lo reenvía. Sin auth.
       security: []
       responses:
         '200':
@@ -505,7 +510,11 @@ paths:
     post:
       tags: [live]
       operationId: createLiveTicket
-      summary: Ticket de un solo uso (60 s) para abrir el WebSocket sin cookie
+      summary: Ticket de un solo uso (60 s) para abrir el WebSocket sin cookie (opcional)
+      description: |
+        Opcional. Un cliente del mismo origen abre el WebSocket directamente con la cookie
+        `cx9_session`; el ticket solo hace falta para clientes que no pueden mandar la cookie
+        (otro origen en desarrollo, herramientas). El ticket vale 60 s y se consume al usarlo.
       responses:
         '201':
           description: Ticket
@@ -574,8 +583,6 @@ paths:
           content:
             audio/wav:
               schema: { type: string, contentMediaType: audio/wav }
-            audio/ogg:
-              schema: { type: string, contentMediaType: audio/ogg }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -797,7 +804,8 @@ components:
         scenarios: { type: integer, description: Escenarios con texto en este idioma }
     Probe:
       type: string
-      enum: [numbers, example, why, ownership, result]
+      description: '`other` solo aparece en repreguntas generadas (WS y turnos); los escenarios no lo aceptan en `probes`.'
+      enum: [numbers, example, why, ownership, result, other]
     ScenarioQuestion:
       type: object
       required: [id, text]
@@ -1002,6 +1010,16 @@ components:
         duration_estimated: { type: boolean }
         low_confidence: { type: array, items: { type: string } }
         skipped: { type: boolean }
+        stt_fillers: { type: array, items: { type: string }, description: 'Opcional: muletillas que marcó el STT (extensión de /stt)' }
+        pauses: { $ref: '#/components/schemas/PauseStats' }
+    PauseStats:
+      type: [object, 'null']
+      description: 'Pausas largas de la respuesta según el STT; null o ausente si el servicio de voz no las informa'
+      required: [cantidad, total_s, mas_larga_s]
+      properties:
+        cantidad: { type: integer, minimum: 0 }
+        total_s: { type: number }
+        mas_larga_s: { type: number }
     SessionDetail:
       allOf:
         - $ref: '#/components/schemas/Session'
@@ -1077,6 +1095,8 @@ components:
             muletillas: { type: array, items: { type: string } }
             muletillas_cada_100: { type: number }
             numeros: { type: array, items: { type: string } }
+            muletillas_fuente: { type: string, enum: [stt, texto], description: 'Opcional: stt si las muletillas vienen del servicio de voz, texto si se detectaron en la transcripción' }
+            pausas: { $ref: '#/components/schemas/PauseStats' }
             star:
               type: object
               required: [S, T, A, R]
@@ -1164,7 +1184,7 @@ components:
       properties:
         v: { type: integer, const: 1 }
         type: { type: string }
-        seq: { type: integer, minimum: 1, description: 'Monótono por dirección, sin huecos; binarios incluidos' }
+        seq: { type: integer, minimum: 0, description: 'Monótono por dirección desde 1, sin huecos; binarios incluidos. `hello` (cliente) y `ack` (servidor) llevan siempre 0 y quedan fuera de la secuencia. Un reenvío conserva su seq original; nunca se renumera.' }
         ts: { type: string, format: date-time }
         session_id: { type: string, format: uuid }
         ack: { type: integer, minimum: 0, description: 'Solo servidor→cliente: último seq del cliente procesado' }
@@ -1178,7 +1198,7 @@ components:
         channels: { type: integer, const: 1 }
         frame_ms: { type: integer, enum: [20, 40, 60, 100], default: 100 }
     WsHello:
-      description: 'cliente→servidor, primer mensaje obligatorio (≤5 s)'
+      description: 'cliente→servidor, primer mensaje obligatorio (≤5 s). Siempre `seq: 0`: exento de la secuencia y del dedupe.'
       allOf:
         - $ref: '#/components/schemas/WsEnvelope'
         - type: object
@@ -1191,7 +1211,7 @@ components:
                 client: { type: string }
                 audio_formats: { type: array, minItems: 1, items: { $ref: '#/components/schemas/AudioFormat' } }
                 tts_delivery: { type: array, items: { type: string, enum: [binary, url, none] } }
-                tts_formats: { type: array, items: { type: string, enum: [pcm16le, wav, opus] } }
+                tts_formats: { type: array, items: { type: string, enum: [pcm16le, wav] } }
                 partials: { type: boolean, default: true }
                 resume:
                   type: [object, 'null']
@@ -1199,7 +1219,7 @@ components:
                   properties:
                     last_server_seq: { type: integer, minimum: 0 }
     WsSessionReady:
-      description: servidor→cliente, respuesta a hello
+      description: 'servidor→cliente, respuesta a hello. Lleva un seq nuevo y puede llegar ANTES de los reenvíos de una reanudación; el cliente ordena y deduplica por seq.'
       allOf:
         - $ref: '#/components/schemas/WsEnvelope'
         - type: object
@@ -1212,7 +1232,7 @@ components:
                 state: { $ref: '#/components/schemas/WsSessionState' }
                 audio_format: { $ref: '#/components/schemas/AudioFormat' }
                 tts_delivery: { type: string, enum: [binary, url, none] }
-                tts_format: { type: string, enum: [pcm16le, wav, opus] }
+                tts_format: { type: string, enum: [pcm16le, wav] }
                 heartbeat_ms: { type: integer, const: 15000 }
                 idle_timeout_ms: { type: integer, const: 45000 }
                 max_inflight_bytes: { type: integer }
@@ -1236,12 +1256,13 @@ components:
               properties:
                 turn_id: { type: string }
                 question_id: { type: string }
-                index: { type: integer, minimum: 1 }
+                index: { type: integer, minimum: 0, description: '1-based para preguntas; kind=intro usa 0 y turn_id t-0 (no espera respuesta); kind=closing usa total y turn_id t-0' }
                 total: { type: integer }
                 text: { type: string }
                 lang: { $ref: '#/components/schemas/Lang' }
                 utterance_id: { type: string }
                 kind: { type: string, enum: [intro, main, closing, repeat], default: main }
+                repeat: { type: boolean, default: false, description: 'true si es una re-emisión. Por control.repeat: mismo turn_id y question_id, seq nuevo, sin turn.end. Tras NO_AUDIO o falla de STT: turn.end next=repeat y luego la misma pregunta con turn_id nuevo.' }
     WsFollowup:
       allOf:
         - $ref: '#/components/schemas/WsEnvelope'
@@ -1256,9 +1277,10 @@ components:
                 question_id: { type: string }
                 followup_index: { type: integer, minimum: 1, maximum: 2 }
                 max_followups: { type: integer, minimum: 0, maximum: 2 }
-                probe: { type: string, enum: [numbers, example, why, ownership, result, other] }
+                probe: { $ref: '#/components/schemas/Probe' }
                 text: { type: string }
                 utterance_id: { type: string }
+                repeat: { type: boolean, default: false, description: 'true si es una re-emisión (mismas reglas que en question). Nunca consume repregunta: followup_index no cambia.' }
     WsTtsAudio:
       description: 'Anuncia audio TTS; si delivery=binary, siguen frames binarios kind=0x02'
       allOf:
@@ -1271,7 +1293,7 @@ components:
               required: [utterance_id, format, sample_rate, duration_ms, chunks, bytes]
               properties:
                 utterance_id: { type: string }
-                format: { type: string, enum: [pcm16le, wav, opus] }
+                format: { type: string, enum: [pcm16le, wav] }
                 sample_rate: { type: integer }
                 duration_ms: { type: integer }
                 chunks: { type: integer }
@@ -1289,7 +1311,7 @@ components:
               properties:
                 utterance_id: { type: string }
                 url: { type: string }
-                format: { type: string, enum: [wav, opus] }
+                format: { type: string, enum: [wav] }
                 duration_ms: { type: integer }
                 expires_at: { type: string, format: date-time }
     WsTranscriptPartial:
@@ -1504,6 +1526,20 @@ components:
               required: [utterance_id]
               properties:
                 utterance_id: { type: string }
+    WsAck:
+      description: 'servidor→cliente, ack periódico mientras el estado es listening: cada 250 ms o cada 32 KB recibidos (lo que pase primero), aunque partials esté apagado. Siempre `seq: 0`; no entra en el replay. `ack` = `data.last_client_seq`.'
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          required: [ack]
+          properties:
+            type: { const: ack }
+            seq: { const: 0 }
+            data:
+              type: object
+              required: [last_client_seq]
+              properties:
+                last_client_seq: { type: integer, minimum: 0 }
     WsClientMessage:
       oneOf:
         - $ref: '#/components/schemas/WsHello'
@@ -1528,5 +1564,6 @@ components:
         - $ref: '#/components/schemas/WsTurnEnd'
         - $ref: '#/components/schemas/WsSessionEnd'
         - $ref: '#/components/schemas/WsError'
+        - $ref: '#/components/schemas/WsAck'
         - $ref: '#/components/schemas/WsPing'
         - $ref: '#/components/schemas/WsPong'
