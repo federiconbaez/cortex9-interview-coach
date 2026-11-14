@@ -210,7 +210,7 @@ jobs:
           # Clave descartable generada en el job (no es un secreto del repo); el hash va entre comillas simples por los '$'.
           CI_PASSWORD="ci-$(openssl rand -hex 12)"
           echo "::add-mask::$CI_PASSWORD"
-          docker compose -f deploy/docker-compose.yml --env-file deploy/.env build backend
+          CX9_PASSWORD_HASH=placeholder docker compose -f deploy/docker-compose.yml --env-file deploy/.env build backend
           HASH="$(printf '%s\n' "$CI_PASSWORD" | docker run --rm -i cortex9/backend:local hash-password)"
           printf "CX9_PASSWORD_HASH='%s'\n" "$HASH" >> deploy/.env
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build --wait --wait-timeout 180
