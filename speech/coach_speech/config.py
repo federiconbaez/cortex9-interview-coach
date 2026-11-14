@@ -83,6 +83,7 @@ class Settings:
     max_concurrency: int = 1
     queue_timeout_s: float = 10.0
     preload: bool = True
+    mock_text: str = ""  # SPEECH_MOCK_TEXT: texto fijo del mock si no viene X-Mock-Transcript (extensión, apagada por defecto)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -131,4 +132,5 @@ class Settings:
             max_concurrency=max(1, _int("SPEECH_MAX_CONCURRENCY", 1)),
             queue_timeout_s=_float("SPEECH_QUEUE_TIMEOUT_S", 10.0),
             preload=_bool("SPEECH_PRELOAD", True),
+            mock_text=os.environ.get("SPEECH_MOCK_TEXT", ""),
         )

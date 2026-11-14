@@ -203,3 +203,19 @@ def test_decode_ogg_opus_when_pyav_available():
     assert audio.dtype == np.float32 and abs(audio.size / 16000 - 1.0) < 0.05
     with pytest.raises(ValueError):
         decode_container(buf.getvalue(), max_s=0.1)
+
+
+def test_mock_default_text_extension(monkeypatch):
+    monkeypatch.setenv("CX9_SPEECH_MODE", "mock")
+    monkeypatch.setenv("SPEECH_MOCK_TEXT", "Eh, este... o sea, usé ?Kafka")
+    stt = make_stt(Settings.from_env())
+    tr = stt.transcribe(_req(body=b"x", language="es"))
+    assert tr.text == "Eh, este... o sea, usé Kafka"
+    # El header del contrato sigue teniendo prioridad.
+    assert stt.transcribe(_req(body=b"x", language="es", mock_transcript="hola")).text == "hola"
+    monkeypatch.delenv("SPEECH_MOCK_TEXT")
+    assert (
+        make_stt(Settings.from_env())
+        .transcribe(_req(body=b"x", language="es"))
+        .text.startswith("respuesta simulada")
+    )

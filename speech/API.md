@@ -103,6 +103,7 @@ Concurrencia: `SPEECH_MAX_CONCURRENCY` (1 por defecto, pensado para poca RAM). U
 Según contrato §6.7: sin modelos ni red, salida idéntica byte a byte para la misma entrada.
 
 - `/stt`: `X-Mock-Transcript` (URL-encoded) o `respuesta simulada <sha256[:8]>` / `simulated answer …`; un segmento; palabras uniformes con `0.9`, las que empiezan con `?` van con `0.3` y sin el `?` (también en `text`); `confidence` = promedio simple; `processing_ms: 0`.
+- Extensión opcional (apagada por defecto): `SPEECH_MOCK_TEXT` fija el texto simulado cuando no llega `X-Mock-Transcript`, con las mismas reglas (`?` → confianza `0.3`). Sirve para probar el flujo completo detrás del backend, que no reenvía headers `X-Mock-*`; sin la variable el comportamiento es el del contrato.
 - `X-Mock-Fail: 503|504|timeout` en `/stt` (y, como extensión, en `/tts`).
 - `/tts`: silencio PCM16 a 16 kHz, `300 + 60 × palabras` ms (ignora `sample_rate`).
 - `/voices`: `mock-es`, `mock-en`. `/health`: `"mode": "mock"`.
@@ -115,6 +116,7 @@ Según contrato §6.7: sin modelos ni red, salida idéntica byte a byte para la 
 | `CX9_SPEECH_MODE` | `real` | `real` \| `mock` |
 | `CX9_SPEECH_TOKEN` | – | Bearer opcional |
 | `SPEECH_HOST` / `SPEECH_PORT` | `127.0.0.1` / `8090` | |
+| `SPEECH_MOCK_TEXT` | – | solo modo mock: texto por defecto de `/stt` |
 | `SPEECH_STT_BACKEND` | `faster-whisper` | `faster-whisper` \| `mock` |
 | `SPEECH_WHISPER_MODEL` | `small` | nombre o ruta local a un modelo CTranslate2 |
 | `SPEECH_WHISPER_DOWNLOAD_ROOT` | `models/whisper` | |

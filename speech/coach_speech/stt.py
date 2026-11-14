@@ -182,7 +182,11 @@ class MockSTT:
     name = "mock"
     model = "mock"
 
-    def __init__(self):
+    def __init__(self, default_text: str = ""):
+        # default_text (SPEECH_MOCK_TEXT) reemplaza al texto con hash cuando no viene
+        # X-Mock-Transcript: sirve para pruebas de integración a través del backend,
+        # que no reenvía headers X-Mock-*. Vacío = comportamiento exacto del contrato §6.7.
+        self.default_text = default_text
         self.calls: list[STTRequest] = []
 
     def ready(self) -> tuple[bool, str]:
@@ -193,6 +197,8 @@ class MockSTT:
         lang = req.language or "es"
         if req.mock_transcript is not None:
             raw = req.mock_transcript
+        elif self.default_text:
+            raw = self.default_text
         else:
             raw = f"{MOCK_PREFIX.get(lang, MOCK_PREFIX['es'])} {hashlib.sha256(req.body).hexdigest()[:8]}"
         tokens = raw.split()
@@ -215,5 +221,5 @@ def make_stt(settings: Settings) -> STTBackend:
     if kind in ("faster-whisper", "whisper", "local"):
         return FasterWhisperSTT(settings)
     if kind == "mock":
-        return MockSTT()
+        return MockSTT(settings.mock_text)
     raise ValueError(f"SPEECH_STT_BACKEND desconocido: {kind} (faster-whisper | mock)")
