@@ -1,0 +1,71 @@
+id: behavioral-star
+title:
+  es: "Conductual con método STAR"
+  en: "Behavioral interview (STAR method)"
+style: "entrevista conductual con un líder técnico, enfocada en hechos concretos"
+max_followups: 2
+ideal_seconds: [60, 150]
+followup_ideal_seconds: [15, 75]
+intro:
+  es: "Hola. En esta práctica te voy a pedir situaciones reales. Intentá contar la situación, tu tarea, lo que hiciste vos y el resultado."
+  en: "Hello. In this practice I will ask you about real situations. Try to describe the situation, your task, what you did, and the result."
+closing:
+  es: "Gracias. Terminamos la práctica conductual."
+  en: "Thank you. We have finished the behavioral practice."
+questions:
+  - id: conflicto
+    text:
+      es: "Contame una vez que tuviste un desacuerdo técnico con alguien del equipo. ¿Qué pasó?"
+      en: "Tell me about a time you had a technical disagreement with a teammate. What happened?"
+    probes: [ownership, result, why]
+    keywords: [desacuerdo, discut, propuse, acordamos, disagree, proposed, agreed]
+    star: true
+    expects_numbers: false
+  - id: error-propio
+    text:
+      es: "Contame un error que cometiste en el trabajo y qué aprendiste."
+      en: "Tell me about a mistake you made at work and what you learned."
+    probes: [ownership, result, example]
+    keywords: [error, equivoqué, aprendí, mistake, learned]
+    star: true
+    expects_numbers: false
+  - id: presion
+    text:
+      es: "Contame una situación con una fecha de entrega muy ajustada. ¿Cómo la manejaste?"
+      en: "Tell me about a situation with a very tight deadline. How did you handle it?"
+    probes: [numbers, why, result]
+    keywords: [plazo, fecha, priori, entrega, deadline, priorit, deliver]
+    star: true
+    expects_numbers: true
+  - id: mentoring
+    text:
+      es: "¿Ayudaste o enseñaste alguna vez a otra persona a crecer técnicamente? Contame un caso."
+      en: "Have you ever helped or taught someone to grow technically? Tell me about one case."
+    probes: [example, result, numbers]
+    keywords: [enseñ, ayud, mentor, curso, alumno, taught, helped, student]
+    star: true
+    expects_numbers: true
+  - id: aprender-rapido
+    text:
+      es: "Contame una vez que tuviste que aprender una tecnología nueva muy rápido."
+      en: "Tell me about a time you had to learn a new technology very fast."
+    probes: [numbers, example, result]
+    keywords: [aprend, nueva, documentación, curso, learn, new, documentation]
+    star: true
+    expects_numbers: true
+  - id: deuda-tecnica
+    text:
+      es: "¿Alguna vez propusiste mejorar código legado o pagar deuda técnica? ¿Cómo lo justificaste?"
+      en: "Have you ever proposed improving legacy code or paying technical debt? How did you justify it?"
+    probes: [why, numbers, result]
+    keywords: [legado, deuda, refactor, migr, legacy, debt, refactor, migrat]
+    star: true
+    expects_numbers: true
+  - id: iniciativa
+    text:
+      es: "Contame algo que hiciste por iniciativa propia, sin que nadie te lo pidiera."
+      en: "Tell me about something you did on your own initiative, without anyone asking."
+    probes: [why, result]
+    keywords: [propuse, iniciativa, automat, mejor, proposed, initiative, improved]
+    star: true
+    expects_numbers: false

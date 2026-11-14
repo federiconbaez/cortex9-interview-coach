@@ -1,0 +1,79 @@
+id: backend-tecnica
+title:
+  es: "Técnica backend (APIs, datos, concurrencia, observabilidad)"
+  en: "Backend technical interview (APIs, data, concurrency, observability)"
+style: "entrevista técnica con un líder técnico de backend, conversacional, sin código en pizarra"
+max_followups: 2
+ideal_seconds: [45, 150]
+followup_ideal_seconds: [15, 90]
+intro:
+  es: "Hola. Vamos a conversar de diseño backend. Pensá en voz alta: me interesa cómo razonás, no solo la respuesta final."
+  en: "Hello. We will talk about backend design. Think out loud: I care about how you reason, not only the final answer."
+closing:
+  es: "Gracias, terminamos la práctica técnica."
+  en: "Thank you, we have finished the technical practice."
+questions:
+  - id: api-100k
+    text:
+      es: "¿Cómo diseñarías una API que tenga que soportar cien mil pedidos por segundo?"
+      en: "How would you design an API that needs to handle one hundred thousand requests per second?"
+    probes: [why, numbers, example]
+    keywords: [cache, réplica, balance, escal, horizontal, cola, queue, replica, scale, load]
+    star: false
+    expects_numbers: true
+  - id: cache-vs-db
+    text:
+      es: "¿Cuándo pondrías un caché como Redis delante de la base de datos, y qué riesgos tiene?"
+      en: "When would you put a cache like Redis in front of the database, and what are the risks?"
+    probes: [why, example]
+    keywords: [redis, ttl, invalid, consistencia, stale, consistency, eviction]
+    star: false
+    expects_numbers: false
+  - id: idempotencia
+    text:
+      es: "¿Qué es la idempotencia y cómo evitarías crear un ticket duplicado si el cliente reintenta?"
+      en: "What is idempotency, and how would you avoid creating a duplicate ticket when the client retries?"
+    probes: [example, why]
+    keywords: [idempot, clave, key, reintento, retry, único, unique]
+    star: false
+    expects_numbers: false
+  - id: concurrencia
+    text:
+      es: "¿Qué diferencia hay entre una goroutine de Go y un hilo del sistema operativo?"
+      en: "What is the difference between a Go goroutine and an operating system thread?"
+    probes: [why, example]
+    keywords: [goroutine, hilo, thread, scheduler, stack, memoria, memory, canal, channel]
+    star: false
+    expects_numbers: true
+  - id: observabilidad
+    text:
+      es: "Un servicio empezó a responder lento en producción. ¿Qué mirás primero y cómo lo investigás?"
+      en: "A service started responding slowly in production. What do you look at first, and how do you investigate?"
+    probes: [example, why, numbers]
+    keywords: [métrica, latencia, p99, log, traza, trace, metric, latency, grafana, datadog]
+    star: false
+    expects_numbers: true
+  - id: n-mas-1
+    text:
+      es: "¿Qué es el problema de N más uno en las consultas a la base, y cómo lo detectás y lo resolvés?"
+      en: "What is the N plus one query problem, and how do you detect and fix it?"
+    probes: [example, numbers]
+    keywords: [consulta, join, índice, query, index, orm, batch]
+    star: false
+    expects_numbers: false
+  - id: resiliencia
+    text:
+      es: "Si una dependencia externa falla, ¿cómo evitás que tu servicio se caiga con ella?"
+      en: "If an external dependency fails, how do you prevent your service from going down with it?"
+    probes: [why, example]
+    keywords: [timeout, reintento, circuit, breaker, fallback, retry, bulkhead]
+    star: false
+    expects_numbers: true
+  - id: testing
+    text:
+      es: "¿Cómo armás la estrategia de pruebas de un servicio backend?"
+      en: "How do you build the testing strategy for a backend service?"
+    probes: [example, numbers, why]
+    keywords: [unit, integración, integration, cobertura, coverage, mock, contrato, contract, carga, load]
+    star: false
+    expects_numbers: true

@@ -1,0 +1,95 @@
+id: screening-ia
+title:
+  es: "Screening con IA (estilo Valeria): experiencia, frameworks, problemas, tecnologías, motivo de cambio y formación"
+  en: "AI screening (Valeria style): experience, frameworks, problems, technologies, reason for change and education"
+style: "screening inicial de RRHH hecho por una IA, que repregunta con calma"
+max_followups: 2
+ideal_seconds: [40, 120]
+followup_ideal_seconds: [15, 75]
+intro:
+  es: "Hola, gracias por estar acá. Te voy a hacer algunas preguntas sobre tu experiencia profesional y tu formación. No hay apuro: tomate tu tiempo para pensar antes de responder."
+  en: "Hello, thank you for being here. I will ask you some questions about your professional experience and your education. There is no rush. Take your time to think before you answer."
+closing:
+  es: "Muchas gracias por tus respuestas. Con esto terminamos la práctica."
+  en: "Thank you very much for your answers. That is the end of the practice."
+questions:
+  - id: recorrido
+    text:
+      es: "Para empezar, contame brevemente tu recorrido profesional."
+      en: "To start, please tell me briefly about your professional background."
+    probes: [example, numbers]
+    keywords: [trabaj, experiencia, años, rol, desarroll, work, experience, years, role]
+    star: false
+    expects_numbers: true
+  - id: rol-actual
+    text:
+      es: "¿En qué estás trabajando actualmente, o cuál fue tu último trabajo? ¿Cuál era tu rol ahí?"
+      en: "What are you working on now, or what was your last job? What was your role there?"
+    probes: [ownership, numbers, example]
+    keywords: [rol, equipo, sistema, proyecto, role, team, system, project]
+    star: false
+    expects_numbers: true
+  - id: frameworks
+    text:
+      es: "¿Qué frameworks usaste en tus últimos proyectos, y para qué los usaste?"
+      en: "Which frameworks did you use in your last projects, and what did you use them for?"
+    probes: [why, example]
+    keywords: [spring, .net, framework, express, react, angular, django, gin, axum, tokio, actix]
+    star: false
+    expects_numbers: false
+  - id: tecnologias
+    text:
+      es: "¿Con qué tecnologías te sentís más fuerte hoy, y en qué proyecto las aplicaste?"
+      en: "Which technologies do you feel strongest with today, and in which project did you apply them?"
+    probes: [example, why]
+    keywords: [java, go, rust, c, .net, linux, sql, docker, kubernetes, python]
+    star: false
+    expects_numbers: false
+  - id: problema-dificil
+    text:
+      es: "Contame un problema técnico difícil que hayas resuelto. ¿Cuál era la situación y qué hiciste vos?"
+      en: "Tell me about a difficult technical problem you solved. What was the situation, and what did you do?"
+    probes: [ownership, numbers, why, result]
+    keywords: [problema, error, bug, falla, solución, problem, issue, solution, fix]
+    star: true
+    expects_numbers: true
+  - id: problema-produccion
+    text:
+      es: "¿Te tocó alguna vez un problema en producción? ¿Cómo lo detectaste y cómo lo resolviste?"
+      en: "Have you ever had a problem in production? How did you detect it and how did you solve it?"
+    probes: [example, numbers, result]
+    keywords: [producción, log, monitoreo, alerta, incidente, production, monitoring, alert, incident]
+    star: true
+    expects_numbers: true
+  - id: node-go
+    text:
+      es: "El puesto pide experiencia en Node.js o Go. ¿Qué experiencia tenés con alguno de los dos?"
+      en: "The role asks for experience with Node.js or Go. What experience do you have with either of them?"
+    probes: [example, why]
+    keywords: [go, node, goroutine, express, aprend, proyecto, learn, project]
+    star: false
+    expects_numbers: false
+  - id: motivo-cambio
+    text:
+      es: "¿Por qué estás buscando un cambio en este momento?"
+      en: "Why are you looking for a change right now?"
+    probes: [why]
+    keywords: [busco, crecer, desafío, cambio, aprender, looking, grow, challenge, change, learn]
+    star: false
+    expects_numbers: false
+  - id: formacion
+    text:
+      es: "Contame sobre tu formación, tanto académica como lo que aprendiste por tu cuenta."
+      en: "Tell me about your education, both academic and what you learned on your own."
+    probes: [example]
+    keywords: [universidad, carrera, curso, ingeniería, estudi, university, degree, course, studied]
+    star: false
+    expects_numbers: false
+  - id: uso-ia
+    text:
+      es: "¿Cómo usás herramientas de inteligencia artificial en tu trabajo diario como desarrollador?"
+      en: "How do you use artificial intelligence tools in your daily work as a developer?"
+    probes: [example, why]
+    keywords: [ia, ai, copilot, cursor, chatgpt, revisión, test, review, prompt]
+    star: false
+    expects_numbers: false
