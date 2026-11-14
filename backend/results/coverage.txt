@@ -1,0 +1,491 @@
+# Cobertura del backend (CX9-6174)
+# Comando: go test -race -count=1 -coverpkg=./... -coverprofile=cover.out ./...
+# Fecha: 2026-11-14 05:35 (America/Buenos_Aires, UTC-3) · go1.27.3 · offline (SQLite, mock de voz y LLM mock)
+# Postgres: los tests de internal/store también pasan con CX9_TEST_DATABASE_URL (Postgres local); no entra en estos números.
+
+## Por paquete (cobertura combinada de todos los tests)
+cmd/coach                          0.0%  (0/55 sentencias)
+internal/analysis                 93.2%  (165/177 sentencias)
+internal/api                      79.5%  (595/748 sentencias)
+internal/app                      80.3%  (57/71 sentencias)
+internal/auth                     94.2%  (49/52 sentencias)
+internal/coach                    73.0%  (224/307 sentencias)
+internal/config                   81.7%  (49/60 sentencias)
+internal/engine                   92.8%  (193/208 sentencias)
+internal/live                     77.5%  (639/824 sentencias)
+internal/llm                      86.3%  (272/315 sentencias)
+internal/metrics                  90.9%  (10/11 sentencias)
+internal/profile                  77.9%  (106/136 sentencias)
+internal/protocol                 95.0%  (19/20 sentencias)
+internal/resilience               90.0%  (63/70 sentencias)
+internal/scenario                 76.0%  (95/125 sentencias)
+internal/scoring                  91.8%  (367/400 sentencias)
+internal/secret                   87.5%  (7/8 sentencias)
+internal/speech                   92.1%  (140/152 sentencias)
+internal/speech/speechmock        73.1%  (114/156 sentencias)
+internal/store                    79.8%  (273/342 sentencias)
+TOTAL                             81.1%  (3437/4237 sentencias)
+
+## Resultado de go test
+ cmd/coach  coverage: 0.0% of statements
+ok   internal/analysis 1.110s coverage: 3.5% of statements in ./...
+ok   internal/api 8.414s coverage: 74.3% of statements in ./...
+ok   internal/app 1.149s coverage: 9.0% of statements in ./...
+ok   internal/auth 1.758s coverage: 1.1% of statements in ./...
+ internal/coach  coverage: 0.0% of statements
+ok   internal/config 1.043s coverage: 1.3% of statements in ./...
+ok   internal/engine 1.039s coverage: 4.5% of statements in ./...
+ internal/live  coverage: 0.0% of statements
+ok   internal/llm 3.125s coverage: 8.2% of statements in ./...
+ internal/metrics  coverage: 0.0% of statements
+ok   internal/profile 1.077s coverage: 3.4% of statements in ./...
+ok   internal/protocol 1.037s coverage: 0.4% of statements in ./...
+ok   internal/resilience 1.042s coverage: 1.4% of statements in ./...
+ok   internal/scenario 1.044s coverage: 2.0% of statements in ./...
+ok   internal/scoring 1.075s coverage: 13.0% of statements in ./...
+ok   internal/secret 1.029s coverage: 0.2% of statements in ./...
+ok   internal/speech 1.055s coverage: 6.7% of statements in ./...
+ internal/speech/speechmock  coverage: 0.0% of statements
+ok   internal/store 1.072s coverage: 5.9% of statements in ./...
+
+## Por función (go tool cover -func)
+cmd/coach/main.go:29: main 0.0%
+cmd/coach/main.go:60: serve 0.0%
+cmd/coach/main.go:79: hashPassword 0.0%
+cmd/coach/main.go:96: healthcheck 0.0%
+internal/analysis/analysis.go:21: b 100.0%
+internal/analysis/analysis.go:87: init 100.0%
+internal/analysis/analysis.go:97: lang 100.0%
+internal/analysis/analysis.go:104: isWordRune 100.0%
+internal/analysis/analysis.go:106: runeBefore 100.0%
+internal/analysis/analysis.go:114: runeAfter 60.0%
+internal/analysis/analysis.go:124: findBounded 90.0%
+internal/analysis/analysis.go:143: containsPhrase 100.0%
+internal/analysis/analysis.go:150: Norm 100.0%
+internal/analysis/analysis.go:156: StripAccents 100.0%
+internal/analysis/analysis.go:170: Words 100.0%
+internal/analysis/analysis.go:172: WordCount 100.0%
+internal/analysis/analysis.go:185: Sentences 100.0%
+internal/analysis/analysis.go:196: FindFillers 100.0%
+internal/analysis/analysis.go:207: FillerRate 100.0%
+internal/analysis/analysis.go:219: FindNumbers 100.0%
+internal/analysis/analysis.go:234: DigitNumbers 100.0%
+internal/analysis/analysis.go:250: Count 100.0%
+internal/analysis/analysis.go:260: StarParts 100.0%
+internal/analysis/analysis.go:278: classifySentence 85.7%
+internal/analysis/analysis.go:293: EstimateSeconds 100.0%
+internal/analysis/analysis.go:298: OneQuestion 54.5%
+internal/analysis/analysis.go:324: RemoveFillers 93.3%
+internal/analysis/analysis.go:350: InventedTerms 96.9%
+internal/analysis/analysis.go:396: DeterministicImprovement 95.7%
+internal/analysis/analysis.go:432: Round 100.0%
+internal/api/misc.go:19: health 100.0%
+internal/api/misc.go:30: ready 71.8%
+internal/api/misc.go:88: isLocalHost 75.0%
+internal/api/misc.go:101: setCookie 100.0%
+internal/api/misc.go:106: login 75.0%
+internal/api/misc.go:156: logout 77.8%
+internal/api/misc.go:171: me 100.0%
+internal/api/misc.go:180: languages 93.1%
+internal/api/misc.go:225: providers 100.0%
+internal/api/misc.go:239: WriteHeader 100.0%
+internal/api/misc.go:240: Write 75.0%
+internal/api/misc.go:248: idempotent 82.9%
+internal/api/misc.go:308: Close 0.0%
+internal/api/problem.go:46: problem 85.7%
+internal/api/problem.go:59: writeJSON 100.0%
+internal/api/profile.go:14: getProfile 77.8%
+internal/api/profile.go:29: decodeProfile 100.0%
+internal/api/profile.go:49: saveProfile 77.8%
+internal/api/profile.go:67: createProfile 80.0%
+internal/api/profile.go:77: putProfile 41.7%
+internal/api/profile.go:97: mergePatch 50.0%
+internal/api/profile.go:116: patchProfile 70.6%
+internal/api/profile.go:162: deleteProfile 50.0%
+internal/api/profile.go:170: profileGaps 53.8%
+internal/api/scenarios.go:15: fieldErr 100.0%
+internal/api/scenarios.go:17: listScenarios 73.3%
+internal/api/scenarios.go:41: parseScenario 72.2%
+internal/api/scenarios.go:69: validateScenario 50.0%
+internal/api/scenarios.go:75: saveRow 100.0%
+internal/api/scenarios.go:84: createScenario 75.0%
+internal/api/scenarios.go:106: wantsYAML 100.0%
+internal/api/scenarios.go:111: getScenario 85.7%
+internal/api/scenarios.go:131: putScenario 72.2%
+internal/api/scenarios.go:160: deleteScenario 63.6%
+internal/api/server.go:43: New 100.0%
+internal/api/server.go:52: routes 100.0%
+internal/api/server.go:89: ServeHTTP 87.5%
+internal/api/server.go:126: newRequestID 100.0%
+internal/api/server.go:133: corsHeaders 100.0%
+internal/api/server.go:154: originAllowed 88.9%
+internal/api/server.go:175: WriteHeader 100.0%
+internal/api/server.go:182: Write 100.0%
+internal/api/server.go:187: Unwrap 0.0%
+internal/api/server.go:189: Flush 0.0%
+internal/api/server.go:195: Hijack 80.0%
+internal/api/server.go:206: bearer 100.0%
+internal/api/server.go:216: checkAuth 85.7%
+internal/api/server.go:228: authed 100.0%
+internal/api/server.go:240: write 78.6%
+internal/api/server.go:265: readBody 77.8%
+internal/api/server.go:279: mediaType 100.0%
+internal/api/sessions.go:21: sessionJSON 100.0%
+internal/api/sessions.go:34: utcPtr 100.0%
+internal/api/sessions.go:43: listSessions 80.5%
+internal/api/sessions.go:104: createSession 78.9%
+internal/api/sessions.go:134: loadSession 75.0%
+internal/api/sessions.go:147: getSession 81.8%
+internal/api/sessions.go:163: deleteSession 58.3%
+internal/api/sessions.go:181: endSession 75.0%
+internal/api/sessions.go:222: report 72.0%
+internal/api/sessions.go:257: liveTicket 68.8%
+internal/api/sessions.go:280: hasToken 100.0%
+internal/api/sessions.go:292: liveWS 100.0%
+internal/api/sessions.go:325: ttsAudio 77.8%
+internal/app/app.go:28: NewLogger 55.6%
+internal/app/app.go:56: Build 73.9%
+internal/app/app.go:89: Shutdown 100.0%
+internal/app/app.go:96: Run 87.9%
+internal/app/app.go:141: dbKind 100.0%
+internal/auth/auth.go:33: HashPassword 83.3%
+internal/auth/auth.go:45: VerifyPassword 94.1%
+internal/auth/auth.go:70: NewToken 80.0%
+internal/auth/auth.go:80: HashToken 100.0%
+internal/auth/auth.go:94: NewLimiter 100.0%
+internal/auth/auth.go:97: Blocked 100.0%
+internal/auth/auth.go:108: Fail 100.0%
+internal/auth/auth.go:115: Reset 100.0%
+internal/auth/auth.go:121: prune 100.0%
+internal/auth/auth.go:132: WithUser 100.0%
+internal/auth/auth.go:137: Expiry 100.0%
+internal/coach/coach.go:64: New 80.0%
+internal/coach/coach.go:100: ParseConfig 75.0%
+internal/coach/coach.go:130: Error 100.0%
+internal/coach/coach.go:144: Scenario 85.7%
+internal/coach/coach.go:166: Scenarios 58.8%
+internal/coach/coach.go:190: ETag 100.0%
+internal/coach/coach.go:196: Profile 77.8%
+internal/coach/coach.go:212: SaveProfile 85.7%
+internal/coach/coach.go:226: CreateSession 79.5%
+internal/coach/coach.go:342: Provider 60.0%
+internal/coach/coach.go:354: StartScoring 100.0%
+internal/coach/coach.go:373: Enqueue 40.0%
+internal/coach/coach.go:386: StopScoring 100.0%
+internal/coach/coach.go:400: score 73.3%
+internal/coach/coach.go:485: Recover 40.0%
+internal/coach/coach.go:515: LearnProfile 77.3%
+internal/coach/ttscache.go:28: NewTTSCache 100.0%
+internal/coach/ttscache.go:32: key 100.0%
+internal/coach/ttscache.go:35: Put 83.3%
+internal/coach/ttscache.go:53: evict 0.0%
+internal/coach/ttscache.go:66: Get 66.7%
+internal/coach/ttscache.go:81: DropSession 60.0%
+internal/config/config.go:40: env 100.0%
+internal/config/config.go:47: envBool 100.0%
+internal/config/config.go:52: envDur 100.0%
+internal/config/config.go:64: envInt 42.9%
+internal/config/config.go:77: Load 78.8%
+internal/config/config.go:154: IsLoopback 100.0%
+internal/config/config.go:167: Prod 100.0%
+internal/engine/engine.go:121: New 80.0%
+internal/engine/engine.go:131: State 100.0%
+internal/engine/engine.go:132: EndReason 0.0%
+internal/engine/engine.go:133: QuestionIndex 100.0%
+internal/engine/engine.go:134: QuestionCount 100.0%
+internal/engine/engine.go:135: CurrentTurnNo 100.0%
+internal/engine/engine.go:136: CurrentTurnID 100.0%
+internal/engine/engine.go:137: MaxFollowups 100.0%
+internal/engine/engine.go:139: turnID 100.0%
+internal/engine/engine.go:140: uttID 100.0%
+internal/engine/engine.go:143: UtteranceNo 100.0%
+internal/engine/engine.go:145: errOut 100.0%
+internal/engine/engine.go:149: conflict 100.0%
+internal/engine/engine.go:153: question 100.0%
+internal/engine/engine.go:156: promptOut 100.0%
+internal/engine/engine.go:182: Start 85.7%
+internal/engine/engine.go:194: nextQuestion 100.0%
+internal/engine/engine.go:209: askMain 100.0%
+internal/engine/engine.go:221: ThinkElapsed 80.0%
+internal/engine/engine.go:232: PromptDelivered 100.0%
+internal/engine/engine.go:246: AcceptAudio 100.0%
+internal/engine/engine.go:251: EndOfAudio 85.7%
+internal/engine/engine.go:264: AcceptText 85.7%
+internal/engine/engine.go:290: Final 100.0%
+internal/engine/engine.go:323: record 100.0%
+internal/engine/engine.go:346: Retry 100.0%
+internal/engine/engine.go:355: LastTurn 100.0%
+internal/engine/engine.go:363: reask 100.0%
+internal/engine/engine.go:380: DecisionInput 100.0%
+internal/engine/engine.go:402: ApplyDecision 87.5%
+internal/engine/engine.go:435: turnEnd 100.0%
+internal/engine/engine.go:440: advance 100.0%
+internal/engine/engine.go:450: Skip 90.0%
+internal/engine/engine.go:468: Repeat 66.7%
+internal/engine/engine.go:480: Pause 100.0%
+internal/engine/engine.go:489: Resume 85.7%
+internal/engine/engine.go:501: finish 100.0%
+internal/engine/engine.go:511: end 100.0%
+internal/engine/engine.go:518: End 100.0%
+internal/engine/engine.go:527: Summary 100.0%
+internal/engine/engine.go:533: CurrentPrompt 60.0%
+internal/live/conn.go:50: newConn 100.0%
+internal/live/conn.go:57: touch 100.0%
+internal/live/conn.go:59: idleFor 0.0%
+internal/live/conn.go:63: signal 100.0%
+internal/live/conn.go:71: enqueue 90.0%
+internal/live/conn.go:87: heavy 100.0%
+internal/live/conn.go:94: closeAfterFlush 100.0%
+internal/live/conn.go:104: closeNow 0.0%
+internal/live/conn.go:114: writer 89.3%
+internal/live/conn.go:156: heartbeat 47.1%
+internal/live/conn.go:186: envelope 100.0%
+internal/live/conn.go:204: errData 100.0%
+internal/live/hub.go:38: DefaultOptions 100.0%
+internal/live/hub.go:58: NewHub 100.0%
+internal/live/hub.go:63: runtime 81.8%
+internal/live/hub.go:98: remove 100.0%
+internal/live/hub.go:107: get 100.0%
+internal/live/hub.go:114: Active 100.0%
+internal/live/hub.go:121: End 100.0%
+internal/live/hub.go:136: Shutdown 100.0%
+internal/live/hub.go:160: engineConfig 100.0%
+internal/live/runtime.go:96: newRuntime 100.0%
+internal/live/runtime.go:105: loop 100.0%
+internal/live/runtime.go:117: post 100.0%
+internal/live/runtime.go:126: nextSeq 100.0%
+internal/live/runtime.go:128: remember 100.0%
+internal/live/runtime.go:140: deliver 60.0%
+internal/live/runtime.go:152: send 100.0%
+internal/live/runtime.go:162: sendAck 80.0%
+internal/live/runtime.go:173: armAck 90.9%
+internal/live/runtime.go:193: sendErr 100.0%
+internal/live/runtime.go:199: fatal 83.3%
+internal/live/runtime.go:210: sendFrame 100.0%
+internal/live/runtime.go:226: negotiate 88.9%
+internal/live/runtime.go:269: attach 95.2%
+internal/live/runtime.go:337: detach 100.0%
+internal/live/runtime.go:359: setStatus 100.0%
+internal/live/runtime.go:376: accept 100.0%
+internal/live/runtime.go:392: bad 100.0%
+internal/live/runtime.go:401: onText 65.0%
+internal/live/runtime.go:516: onFrame 60.0%
+internal/live/runtime.go:538: parseNo 75.0%
+internal/live/runtime.go:548: resetAudio 100.0%
+internal/live/runtime.go:553: conflictOnce 0.0%
+internal/live/runtime.go:561: audio 61.8%
+internal/live/runtime.go:605: stopPartials 100.0%
+internal/live/runtime.go:613: partialTick 84.6%
+internal/live/runtime.go:649: endAudio 81.8%
+internal/live/runtime.go:678: sttDone 66.7%
+internal/live/runtime.go:721: answerText 71.4%
+internal/live/runtime.go:732: finalize 100.0%
+internal/live/runtime.go:745: decide 68.0%
+internal/live/runtime.go:782: learn 91.7%
+internal/live/runtime.go:799: persistTurns 75.0%
+internal/live/runtime.go:812: saveAudio 0.0%
+internal/live/runtime.go:820: wav 0.0%
+internal/live/runtime.go:839: emit 67.7%
+internal/live/runtime.go:892: stopListenTimer 100.0%
+internal/live/runtime.go:899: ttsRequest 75.0%
+internal/live/runtime.go:908: prompt 71.4%
+internal/live/runtime.go:938: ttsSync 77.8%
+internal/live/runtime.go:952: deliverTTS 74.2%
+internal/live/runtime.go:997: finish 96.6%
+internal/live/runtime.go:1032: waitTimeout 100.0%
+internal/live/ws.go:17: Serve 73.2%
+internal/llm/http.go:16: postJSON 88.2%
+internal/llm/http.go:48: NewOpenAICompatible 100.0%
+internal/llm/http.go:52: ID 100.0%
+internal/llm/http.go:53: Model 0.0%
+internal/llm/http.go:55: Complete 88.9%
+internal/llm/http.go:90: NewAnthropic 100.0%
+internal/llm/http.go:94: ID 0.0%
+internal/llm/http.go:95: Model 0.0%
+internal/llm/http.go:97: Complete 92.3%
+internal/llm/http.go:131: NewOllama 100.0%
+internal/llm/http.go:135: ID 100.0%
+internal/llm/http.go:136: Model 0.0%
+internal/llm/http.go:138: Complete 100.0%
+internal/llm/http.go:158: modelOr 66.7%
+internal/llm/llm.go:51: Error 100.0%
+internal/llm/llm.go:58: Retryable 100.0%
+internal/llm/llm.go:60: httpErr 75.0%
+internal/llm/llm.go:68: transportErr 100.0%
+internal/llm/llm.go:77: redactURL 40.0%
+internal/llm/llm.go:88: ParseJSON 75.0%
+internal/llm/llm.go:101: mustJSON 100.0%
+internal/llm/llm.go:207: Call 100.0%
+internal/llm/llm.go:223: WithModel 66.7%
+internal/llm/llm.go:230: Model 0.0%
+internal/llm/llm.go:232: Complete 0.0%
+internal/llm/mock.go:45: NewMock 100.0%
+internal/llm/mock.go:46: ID 100.0%
+internal/llm/mock.go:47: Model 100.0%
+internal/llm/mock.go:49: Complete 95.8%
+internal/llm/mock.go:84: lg 100.0%
+internal/llm/mock.go:94: MockFollowup 90.0%
+internal/llm/mock.go:130: mockScore 85.7%
+internal/llm/mock.go:164: mockImprove 90.9%
+internal/llm/mock.go:196: MockProfile 76.1%
+internal/llm/mock.go:274: MockEnglish 100.0%
+internal/llm/mock.go:284: keys 100.0%
+internal/llm/mock.go:293: contains 75.0%
+internal/llm/prompts.go:10: ln 66.7%
+internal/llm/prompts.go:17: FollowupSystem 100.0%
+internal/llm/prompts.go:32: ScoreSystem 100.0%
+internal/llm/prompts.go:41: ImproveSystem 100.0%
+internal/llm/registry.go:53: NewRegistry 95.8%
+internal/llm/registry.go:93: Default 100.0%
+internal/llm/registry.go:96: Get 83.3%
+internal/llm/registry.go:108: List 88.2%
+internal/llm/resilient.go:18: LLMCall 0.0%
+internal/llm/resilient.go:19: LLMBreaker 0.0%
+internal/llm/resilient.go:32: NewResilient 100.0%
+internal/llm/resilient.go:42: ID 100.0%
+internal/llm/resilient.go:43: Model 100.0%
+internal/llm/resilient.go:45: Complete 100.0%
+internal/metrics/metrics.go:35: New 100.0%
+internal/metrics/metrics.go:60: Handler 100.0%
+internal/metrics/metrics.go:63: LLMCall 100.0%
+internal/metrics/metrics.go:66: LLMBreaker 0.0%
+internal/metrics/metrics.go:69: SpeechCall 100.0%
+internal/metrics/metrics.go:72: SpeechError 100.0%
+internal/profile/profile.go:56: Empty 100.0%
+internal/profile/profile.go:61: FromInput 100.0%
+internal/profile/profile.go:76: Validate 81.8%
+internal/profile/profile.go:96: supported 100.0%
+internal/profile/profile.go:101: mergeList 90.0%
+internal/profile/profile.go:119: Merge 68.8%
+internal/profile/profile.go:225: slug 100.0%
+internal/profile/profile.go:230: Gaps 100.0%
+internal/profile/profile.go:272: Summary 66.7%
+internal/protocol/protocol.go:116: Now 100.0%
+internal/protocol/protocol.go:314: EncodeFrame 100.0%
+internal/protocol/protocol.go:333: DecodeFrame 83.3%
+internal/resilience/resilience.go:21: String 50.0%
+internal/resilience/resilience.go:49: NewBreaker 100.0%
+internal/resilience/resilience.go:53: now 66.7%
+internal/resilience/resilience.go:60: setState 100.0%
+internal/resilience/resilience.go:70: State 100.0%
+internal/resilience/resilience.go:80: Allow 91.7%
+internal/resilience/resilience.go:101: Record 100.0%
+internal/resilience/resilience.go:121: IsRetryable 100.0%
+internal/resilience/resilience.go:131: Delay 87.5%
+internal/resilience/resilience.go:147: Do 90.0%
+internal/scenario/scenario.go:32: Get 33.3%
+internal/scenario/scenario.go:61: IsStar 100.0%
+internal/scenario/scenario.go:62: WantsNumbers 100.0%
+internal/scenario/scenario.go:63: ProbeList 66.7%
+internal/scenario/scenario.go:85: StyleOr 66.7%
+internal/scenario/scenario.go:92: MaxF 66.7%
+internal/scenario/scenario.go:99: Ideal 66.7%
+internal/scenario/scenario.go:106: FollowupIdeal 66.7%
+internal/scenario/scenario.go:122: Error 0.0%
+internal/scenario/scenario.go:130: validI18n 83.3%
+internal/scenario/scenario.go:143: Validate 82.2%
+internal/scenario/scenario.go:212: ParseYAML 100.0%
+internal/scenario/scenario.go:226: ParseJSON 85.7%
+internal/scenario/scenario.go:248: ToYAML 100.0%
+internal/scenario/scenario.go:263: LoadBuiltin 85.7%
+internal/scoring/markdown.go:8: stars 100.0%
+internal/scoring/markdown.go:15: fnum 100.0%
+internal/scoring/markdown.go:23: Markdown 95.3%
+internal/scoring/markdown.go:140: trunc 0.0%
+internal/scoring/scoring.go:46: ptr 100.0%
+internal/scoring/scoring.go:62: Get 100.0%
+internal/scoring/scoring.go:63: Set 100.0%
+internal/scoring/scoring.go:74: set 100.0%
+internal/scoring/scoring.go:187: ip 100.0%
+internal/scoring/scoring.go:188: fp 100.0%
+internal/scoring/scoring.go:190: clamp 50.0%
+internal/scoring/scoring.go:210: DurationScore 85.7%
+internal/scoring/scoring.go:224: FillerScore 66.7%
+internal/scoring/scoring.go:238: NumberScore 100.0%
+internal/scoring/scoring.go:251: Heuristic 93.9%
+internal/scoring/scoring.go:325: overall 100.0%
+internal/scoring/scoring.go:345: scoreTurn 87.0%
+internal/scoring/scoring.go:386: normalizeMissing 88.9%
+internal/scoring/scoring.go:401: improve 80.8%
+internal/scoring/scoring.go:442: containsStr 100.0%
+internal/scoring/scoring.go:451: english 88.2%
+internal/scoring/scoring.go:478: Evaluate 96.6%
+internal/scoring/scoring.go:561: notApplicable 60.0%
+internal/scoring/scoring.go:573: nonNil 100.0%
+internal/scoring/scoring.go:580: top3 100.0%
+internal/secret/secret.go:10: New 100.0%
+internal/secret/secret.go:11: Reveal 100.0%
+internal/secret/secret.go:12: IsSet 100.0%
+internal/secret/secret.go:13: String 100.0%
+internal/secret/secret.go:14: GoString 100.0%
+internal/secret/secret.go:15: LogValue 100.0%
+internal/secret/secret.go:16: MarshalJSON 100.0%
+internal/secret/secret.go:17: MarshalText 0.0%
+internal/speech/client.go:78: FillerTexts 100.0%
+internal/speech/client.go:90: LowConfidence 100.0%
+internal/speech/client.go:163: Error 100.0%
+internal/speech/client.go:174: Retryable 100.0%
+internal/speech/client.go:177: IsTimeout 100.0%
+internal/speech/client.go:186: IsNoAudio 100.0%
+internal/speech/client.go:199: SpeechCall 0.0%
+internal/speech/client.go:200: SpeechError 0.0%
+internal/speech/client.go:214: New 100.0%
+internal/speech/client.go:228: BreakerStates 100.0%
+internal/speech/client.go:233: STTTimeout 100.0%
+internal/speech/client.go:237: do 84.2%
+internal/speech/client.go:272: WithRequestID 0.0%
+internal/speech/client.go:287: STT 97.4%
+internal/speech/client.go:340: TTS 96.2%
+internal/speech/client.go:375: observe 81.8%
+internal/speech/client.go:395: Health 84.6%
+internal/speech/client.go:415: Voices 81.8%
+internal/speech/speechmock/mock.go:24: problem 100.0%
+internal/speech/speechmock/mock.go:34: Handler 100.0%
+internal/speech/speechmock/mock.go:57: forcedFailure 55.6%
+internal/speech/speechmock/mock.go:76: stt 71.2%
+internal/speech/speechmock/mock.go:181: nonNil 100.0%
+internal/speech/speechmock/mock.go:188: round3 100.0%
+internal/speech/speechmock/mock.go:190: wavDuration 0.0%
+internal/speech/speechmock/mock.go:204: tts 76.5%
+internal/speech/speechmock/mock.go:260: WAV 100.0%
+internal/store/store.go:35: ts 100.0%
+internal/store/store.go:37: parseTS 100.0%
+internal/store/store.go:42: nts 100.0%
+internal/store/store.go:49: pts 100.0%
+internal/store/store.go:64: Open 66.7%
+internal/store/store.go:105: Close 100.0%
+internal/store/store.go:108: q 18.2%
+internal/store/store.go:125: exec 100.0%
+internal/store/store.go:129: row 100.0%
+internal/store/store.go:134: Migrate 65.6%
+internal/store/store.go:178: splitSQL 100.0%
+internal/store/store.go:194: isUnique 100.0%
+internal/store/store.go:204: CreateToken 100.0%
+internal/store/store.go:211: TokenExpiry 100.0%
+internal/store/store.go:220: DeleteToken 100.0%
+internal/store/store.go:226: UseTicket 80.0%
+internal/store/store.go:236: PurgeExpired 75.0%
+internal/store/store.go:251: ListScenarios 46.2%
+internal/store/store.go:270: GetScenario 100.0%
+internal/store/store.go:281: InsertScenario 100.0%
+internal/store/store.go:291: UpdateScenario 84.6%
+internal/store/store.go:311: DeleteScenario 83.3%
+internal/store/store.go:324: GetProfile 100.0%
+internal/store/store.go:333: PutProfile 92.9%
+internal/store/store.go:356: DeleteProfile 100.0%
+internal/store/store.go:388: scanSession 95.5%
+internal/store/store.go:420: InsertSession 100.0%
+internal/store/store.go:431: GetSession 100.0%
+internal/store/store.go:440: SaveSession 66.7%
+internal/store/store.go:458: SetStatus 90.9%
+internal/store/store.go:475: DeleteSession 66.7%
+internal/store/store.go:492: SessionsByStatus 85.7%
+internal/store/store.go:530: ListSessions 80.0%
+internal/store/store.go:606: PutTurn 100.0%
+internal/store/store.go:612: Turns 81.8%
+internal/store/store.go:631: PutReport 100.0%
+internal/store/store.go:638: GetReport 100.0%
+internal/store/store.go:657: IdemBegin 81.8%
+internal/store/store.go:674: IdemComplete 100.0%
+internal/store/store.go:680: IdemRelease 0.0%
+total: (statements) 81.1%
