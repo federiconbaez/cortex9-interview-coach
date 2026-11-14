@@ -1010,7 +1010,7 @@ components:
         duration_estimated: { type: boolean }
         low_confidence: { type: array, items: { type: string } }
         skipped: { type: boolean }
-        stt_fillers: { type: array, items: { type: string }, description: 'Opcional: muletillas que marcó el STT (extensión de /stt)' }
+        stt_fillers: { type: array, items: { type: string }, description: 'Opcional: muletillas que marcó el STT (extensión de /stt). Ausente si /speech no mandó la extensión; [] si la mandó con cero muletillas (y entonces details.muletillas_fuente = stt).' }
         pauses: { $ref: '#/components/schemas/PauseStats' }
     PauseStats:
       type: [object, 'null']
@@ -1095,7 +1095,7 @@ components:
             muletillas: { type: array, items: { type: string } }
             muletillas_cada_100: { type: number }
             numeros: { type: array, items: { type: string } }
-            muletillas_fuente: { type: string, enum: [stt, texto], description: 'Opcional: stt si las muletillas vienen del servicio de voz, texto si se detectaron en la transcripción' }
+            muletillas_fuente: { type: string, enum: [stt, texto], description: 'Opcional: stt si el servicio de voz mandó la lista de muletillas (aunque sea vacía), texto si se detectaron en la transcripción' }
             pausas: { $ref: '#/components/schemas/PauseStats' }
             star:
               type: object

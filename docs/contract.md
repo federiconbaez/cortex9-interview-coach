@@ -101,6 +101,15 @@ En desarrollo el frontend corre en Vite (`http://localhost:5173`) y el backend e
 - En producción (`CX9_ENV=prod`) CORS está apagado: todo pasa por el mismo origen detrás del proxy de `/deploy`.
 - El handshake WS valida `Origin` contra la misma lista (`403 ORIGIN_NOT_ALLOWED`).
 
+**Regla de `Origin` (métodos de escritura y handshake WS, en dev y en prod):**
+
+1. Sin header `Origin` (curl, herramientas) → se acepta.
+2. Si el `Origin` sin `/` final, quitando el esquema (`http://` o `https://`), es **exactamente igual** al `Host` del request, **puerto incluido**, se acepta. Ejemplos: `Origin: http://localhost:8080` con `Host: localhost:8080` pasa; con `Host: localhost` (sin puerto) o `Host: 127.0.0.1:8080` (otro nombre) **no** pasa. El esquema no se compara. La comparación es de texto, así que un `Host` con el puerto por defecto explícito (`:443`) no coincide con un `Origin` sin puerto.
+3. Si no es el mismo host y `CX9_ENV` no es `prod`, se acepta si está en `CX9_CORS_ORIGINS` (eco exacto).
+4. En otro caso → `403 ORIGIN_NOT_ALLOWED` (antes del upgrade en el WS).
+
+**Detrás de un proxy**, el proxy tiene que pasar el `Host` **original** del navegador, con puerto, no el del upstream. En nginx: `proxy_set_header Host $http_host;` (`$host` pierde el puerto y `proxy_pass` sin ese header manda el nombre del upstream), como hace `deploy/frontend/nginx.conf`. El proxy de Vite tiene que usar `changeOrigin: false`. Si el `Host` no llega intacto, todas las escrituras y el WS dan `403`.
+
 ### 2.6 Autenticación local (un solo usuario)
 
 - Un único usuario implícito (`local`). La contraseña se configura con `CX9_PASSWORD_HASH` (argon2id) o, en dev, `CX9_DEV_NO_AUTH=1` (solo si el backend escucha en 127.0.0.1; lo registra con un WARN al arrancar).
@@ -876,7 +885,7 @@ Respuesta `200 application/json`:
   - `segments[].words[].is_filler` (bool): la palabra es muletilla.
   - `fillers`: `[{ "text": "eh", "start_s": 0.0, "end_s": 0.3 }]` y `filler_count` (entero).
   - `pauses`: `[{ "start_s": 2.1, "end_s": 3.0, "duration_s": 0.9 }]`, huecos largos entre palabras.
-  - El backend usa `fillers` para la dimensión `muletillas` (`details.muletillas_fuente = "stt"`) y `pauses` para `details.pausas` y `Turn.pauses` (`{cantidad, total_s, mas_larga_s}`; `null` si no vienen).
+  - El backend usa `fillers` para la dimensión `muletillas` (`details.muletillas_fuente = "stt"`, también si la lista viene vacía: cero muletillas según el STT; `Turn.stt_fillers` queda `[]`, y solo se omite si la extensión no vino) y `pauses` para `details.pausas` y `Turn.pauses` (`{cantidad, total_s, mas_larga_s}`; `null` si no vienen).
 
 ### 6.2 `POST /tts`
 
@@ -994,4 +1003,4 @@ El backend tiene su **propio fake** en Go que implementa este mismo contrato en 
 
 - Servicio de voz: `/stt` suma las extensiones opcionales `fillers`, `filler_count`, `pauses` y `words[].is_filler` (§6.1); `/tts` solo `wav`/`pcm16le` y `422` para `opus` (§6.2); un parcial ocupado da `503` inmediato y el backend lo saltea (§6.5); `degraded` en `/health` es usable (§6.3, §4.1); `401 UNAUTHENTICATED` (§6.6); el `?` del mock puede quedar en `text` (§6.7). Los parciales mandan los últimos 12 s; el final, el turno completo.
 - WS: `hello` y el nuevo `ack` van con `seq: 0` fuera de la secuencia; el dedupe descarta solo `seq <= last_client_seq` y nada se renumera; `session.ready` puede llegar antes que los reenvíos (§5.2). Acks periódicos cada 250 ms o 32 KB en `listening` (§5.8). `opus` sale de los formatos de TTS. `probe` suma `other`. Con `tts_delivery=none` no hay `tts.played`. `control.repeat` re-emite con `repeat: true`, mismo `turn_id`/`question_id`, sin `turn.end` y sin consumir repregunta (§5.5). Intro `index: 0` y cierre `index: total` con `turn_id "t-0"`.
-- REST: `live-ticket` es opcional (§5.1). Campos opcionales nuevos: `Turn.stt_fillers`, `Turn.pauses`, `details.pausas`, `details.muletillas_fuente`. `/metrics` en el mismo puerto que la API.
+- REST: `live-ticket` es opcional (§5.1). §2.5 deja escrita la regla de `Origin` igual a `Host` con puerto y que un proxy tiene que pasar el `Host` original (`$http_host` en nginx). Campos opcionales nuevos: `Turn.stt_fillers`, `Turn.pauses`, `details.pausas`, `details.muletillas_fuente`. `/metrics` en el mismo puerto que la API.
