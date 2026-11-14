@@ -12,6 +12,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:real": "playwright test -c playwright.real.config.ts",
     "mock": "node mock-server/server.mjs",
     "gen:api": "openapi-typescript ../docs/openapi.yaml -o src/api/contract/openapi.ts"
   },
