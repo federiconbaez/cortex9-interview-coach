@@ -105,8 +105,9 @@ externa. `forbidOnly` está activo y no hay tests `skip`/`todo`. El mock acepta
 `playwright.real.config.ts` corre `e2e-real/backend.mjs`, que compila `../backend/cmd/coach`
 a un directorio temporal (o usa el binario de `CX9_COACH_BIN`) y levanta `coach speech-mock`
 (127.0.0.1:18590) y `coach serve` (127.0.0.1:18580) con SQLite temporal, `CX9_LLM_PROVIDER=mock`,
-contraseña `practica` y `CX9_CORS_ORIGINS=http://127.0.0.1:4174` (el backend compara el `Origin`
-del WebSocket con esa lista). El preview queda en 4174 apuntando a ese backend. Al terminar se
+contraseña `practica` y `CX9_CORS_ORIGINS=http://127.0.0.1:4174`. Con la regla de §2.5 (Origin
+igual a Host con puerto) y el proxy de Vite con `changeOrigin: false` esa lista ya no hace falta;
+queda para builds anteriores. El preview queda en 4174 apuntando a ese backend. Al terminar se
 borra el directorio temporal. No forma parte de `test:e2e` ni del CI. Sin `CX9_COACH_BIN`
 compila el árbol de trabajo de `backend/`, con lo que haya sin commitear.
 
@@ -129,7 +130,9 @@ resultado), con Node v22.23.5, el 14/11/2026:
   líneas 94,91 % (1194/1258).
 - `npm run test:e2e`: **14 tests, 14 pasan** (31,2 s); 5 de ellos hacen en total 7 chequeos axe (WCAG 2.0/2.1 A y AA).
 - `npm run test:e2e:real` con el backend compilado del commit `7f510cf` (backend/ igual que en
-  `a1be862`): **2 tests, 2 pasan** (18,5 s), con 2 chequeos axe.
+  `a1be862`): **2 tests, 2 pasan** (18,5 s), con 2 chequeos axe. Con el backend de `64324df`
+  (regla de Origin y fix de muletillas_fuente): **2 de 2** (16,3 s), y también 2 de 2 con
+  `CX9_CORS_ORIGINS` apuntando a otro puerto (el WS pasa por Origin igual a Host).
 - `npm run build`: `dist/` = 236 755 bytes (JS 230 483 B, 73,02 kB gzip; CSS 5 428 B;
   `capture-worklet.js` 381 B; `index.html` 463 B).
 

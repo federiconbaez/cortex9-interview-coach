@@ -669,7 +669,7 @@ export interface components {
             duration_estimated?: boolean;
             low_confidence?: string[];
             skipped?: boolean;
-            /** @description Opcional: muletillas que marcó el STT (extensión de /stt) */
+            /** @description Opcional: muletillas que marcó el STT (extensión de /stt). Ausente si /speech no mandó la extensión; [] si la mandó con cero muletillas (y entonces details.muletillas_fuente = stt). */
             stt_fillers?: string[];
             pauses?: components["schemas"]["PauseStats"];
         };
@@ -738,7 +738,7 @@ export interface components {
                 muletillas_cada_100: number;
                 numeros: string[];
                 /**
-                 * @description Opcional: stt si las muletillas vienen del servicio de voz, texto si se detectaron en la transcripción
+                 * @description Opcional: stt si el servicio de voz mandó la lista de muletillas (aunque sea vacía), texto si se detectaron en la transcripción
                  * @enum {string}
                  */
                 muletillas_fuente?: "stt" | "texto";

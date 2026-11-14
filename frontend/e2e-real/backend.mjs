@@ -8,6 +8,8 @@ import { join, resolve } from 'node:path';
 
 const HTTP = process.env.REAL_HTTP_ADDR ?? '127.0.0.1:18580';
 const SPEECH = process.env.REAL_SPEECH_ADDR ?? '127.0.0.1:18590';
+// §2.5: el proxy de Vite (changeOrigin: false) deja Origin == Host, que el backend ya acepta;
+// la lista de CORS solo hace falta con builds anteriores a esa regla.
 const ORIGIN = process.env.REAL_ORIGIN ?? 'http://127.0.0.1:4174';
 const PASSWORD = process.env.REAL_PASSWORD ?? 'practica';
 
