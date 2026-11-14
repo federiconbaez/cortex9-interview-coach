@@ -1,0 +1,1 @@
+{"items":[{"id":"screening-ia","title":"Screening con IA (mock)","style":"screening","builtin":true,"languages":["es","en"],"question_count":3,"max_followups":2},{"id":"behavioral-star","title":"Conductual STAR (mock)","style":"star","builtin":true,"languages":["es","en"],"question_count":2,"max_followups":2}]}

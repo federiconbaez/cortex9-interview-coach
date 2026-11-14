@@ -1,0 +1,1 @@
+{"items":[{"code":"es","name":"Español","stt":true,"tts_voices":["mock-es"],"default_voice":"mock-es","slow_speech":false,"english_feedback":false,"scenarios":2},{"code":"en","name":"English","stt":true,"tts_voices":["mock-en"],"default_voice":"mock-en","slow_speech":true,"english_feedback":true,"scenarios":2}]}
