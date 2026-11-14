@@ -1,0 +1,7 @@
+results/
+data/
+*.db
+*.db-*
+coach
+Dockerfile
+.dockerignore
