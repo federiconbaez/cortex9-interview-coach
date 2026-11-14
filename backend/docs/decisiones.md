@@ -67,10 +67,46 @@ el contrato está en `../../docs/contract.md`; acá va cómo lo implementa el ba
 - `degraded` en `/health` de voz es usable: `/v1/ready` lo informa con 200.
 - STT fallido tras el reintento → `STT_TIMEOUT`/`STT_UNAVAILABLE`, `turn.end{next:repeat}`
   y la misma pregunta otra vez (turn_id nuevo, sin consumir repregunta).
-- El TTS del **cierre** es síncrono (va antes de `session.end`) y no espera `tts.played`.
-  Para el resto, el servidor pasa a `listening` con `tts.played` o, si no llega, al
-  terminar la duración del audio + 3 s. Con `tts_delivery=none` pasa a `listening` al
-  mandar la pregunta y no espera `tts.played`.
+- `tts.played` (contrato §5.14). El TTS del **cierre** es síncrono (va antes de
+  `session.end`) y no espera `tts.played`. Para intro, pregunta y repregunta el servidor
+  espera `tts.played` antes de pasar a `listening` (o, en la intro, antes de la primera
+  pregunta). Si no llega en `duration_ms + CX9_TTS_PLAYED_GRACE_MS` (3 s), o en
+  `CX9_TTS_PLAYED_TIMEOUT_MS` (20 s) si la duración no se conoce, avanza igual: no es un
+  error, queda un log `warn` y `cx9_tts_played_timeouts_total`. Con `tts_delivery=none`
+  avanza enseguida. Ya se esperaba así desde v1.0 (duración + 3 s, también para la intro);
+  v1.2 lo documenta, suma el timeout fijo para duración desconocida, el log/métrica y la
+  regla explícita de duplicados: el runtime guarda el último `utterance_id` confirmado y
+  descarta cualquier `tts.played` con número menor o igual (los `utterance_id` crecen
+  siempre, una repetición tiene uno nuevo). Elegido por simple: un entero, sin mapa.
+
+## 5b. Endpointing por silencio (contrato v1.2 §5.15)
+
+- Solo se analiza el audio del micrófono del usuario que manda el cliente en su turno.
+- Paquete `internal/endpoint` puro (sin red ni reloj, tiempos en ms de audio del turno):
+  VAD de energía RMS sobre frames de 20 ms y aplicación de `speech_ended_ms` /
+  `trailing_silence_ms` del `/stt` parcial (relativos a la ventana mandada; se pasan a
+  absolutos con el inicio de la ventana). El runtime pone el reloj: la ventana de gracia
+  es de reloj (`CX9_ENDPOINT_GRACE_MS`) y se confirma solo si no hubo voz nueva después
+  del audio que había al detectar el candidato.
+- `auto` empieza con `stt` y cae a `energy` en cuanto un parcial vuelve sin los campos
+  (servicio viejo) o falla/está ocupado (503). Para no esperar al próximo parcial
+  periódico (1,5 s), cuando la energía ve un silencio candidato se pide un parcial en el
+  momento (una vez por silencio). Con endpointing `stt`/`auto` se piden parciales aunque
+  el cliente haya apagado `partials` (no se le mandan `transcript.partial`).
+- Al cerrar se marca el turno como cerrado por endpoint: los chunks que lleguen tarde de
+  ese turno se descartan sin `STATE_CONFLICT` (el cliente todavía no vio el `turn.end`).
+- Latencia: al cerrar se lanza enseguida el STT final. Si el último parcial cubre todo el
+  turno (ventana desde 0) hasta el fin de voz, en paralelo se consulta al LLM con ese
+  parcial (especulativo). Al llegar el final se compara por palabras normalizadas (1 −
+  distancia de edición / largo); con ≥ 0,9 se usa la decisión especulativa (si todavía no
+  llegó, se espera a esa en vez de lanzar otra) y si no se descarta. Lo guardado y
+  puntuado es siempre el texto final. `transcript.final` sale siempre antes que la
+  decisión (`turn.end`), aunque la especulativa ya esté lista.
+- Métricas: `cx9_endpoint_to_followup_tts_seconds{mode,provider}` (desde el fin de voz
+  estimado por la hora de llegada del chunk que lo contiene, o desde `audio.end`, hasta el
+  primer frame o `tts.url` de la intervención siguiente; con `tts_delivery=none` no se
+  observa), `cx9_turn_stage_seconds{stage=stt_final|llm_followup|tts_first_byte}`,
+  `cx9_endpoints_total{source}` y `cx9_speculative_followups_total{result}`.
 
 ## 6. Motor de la entrevista
 

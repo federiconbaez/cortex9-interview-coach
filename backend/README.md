@@ -37,6 +37,8 @@ internal/resilience  reintentos con backoff/jitter y circuit breaker
 internal/store       Postgres (pgx) y SQLite (modernc, sin CGO) con migraciones embebidas
 internal/auth        argon2id, tokens opacos (solo se guarda el SHA-256), límite de login
 internal/metrics     métricas Prometheus del contrato (§4.1)
+internal/endpoint    endpointing por silencio: VAD de energía RMS, campos de VAD del /stt parcial,
+                     ventana de gracia y similitud de textos para la decisión especulativa
 internal/protocol    tipos del WS y header binario de 20 bytes
 internal/secret      tipo para claves que nunca se imprimen ni se serializan
 ```
@@ -44,7 +46,8 @@ internal/secret      tipo para claves que nunca se imprimen ni se serializan
 Flujo de una sesión de voz: `POST /v1/sessions` → `GET /v1/sessions/{id}/live`
 (cookie o ticket) → `hello` (seq 0) → `session.ready` → `question` + TTS → audio del
 usuario en frames binarios (acks cada 250 ms o 32 KB) → parciales cada ~1,5 s con los
-últimos 12 s → `audio.end` → STT del turno completo → `transcript.final` → el LLM decide
+últimos 12 s → `audio.end` o cierre por silencio (endpointing, `turn.end.reason =
+"endpoint"`) → STT del turno completo → `transcript.final` → el LLM decide
 repregunta (o la lógica local si falla) → `turn.end` → … → `session.end` → scoring en
 segundo plano → `GET /v1/sessions/{id}/report` (202 mientras puntúa, después 200).
 
@@ -130,6 +133,14 @@ proveedores solo dice `configured: true/false`).
 | `CX9_PARTIAL_WINDOW` | `12s` | Audio que se manda en cada parcial (los últimos N segundos) |
 | `CX9_RECONNECT_GRACE` | `120s` | Gracia para reconectar con resume |
 | `CX9_MAX_TURN_MS` | `300000` | Duración máxima de una respuesta |
+| `CX9_TTS_PLAYED_GRACE_MS` | `3000` | Espera de `tts.played` además de `duration_ms` del audio; si no llega, el servidor avanza igual (log `warn` y `cx9_tts_played_timeouts_total`). Rango 0-60000 |
+| `CX9_TTS_PLAYED_TIMEOUT_MS` | `20000` | Espera de `tts.played` cuando la duración del audio no se conoce. Rango 1000-300000 |
+| `CX9_ENDPOINT_MODE` | `auto` | Endpointing por silencio: `off`, `stt` (campos de VAD del `/stt` parcial), `energy` (VAD RMS del backend) o `auto` (stt y, si el servicio no los manda o falla, energy) |
+| `CX9_ENDPOINT_SILENCE_MS` | `700` | Silencio final (ms de audio) que cierra el turno después de haber voz. Rango 100-10000 |
+| `CX9_ENDPOINT_GRACE_MS` | `200` | Ventana de gracia antes de cerrar: si vuelve la voz, no se corta. Rango 0-5000 |
+| `CX9_ENDPOINT_RMS` | `500` | Umbral RMS de voz (sobre 32767) del VAD de energía, frames de 20 ms |
+| `CX9_ENDPOINT_MIN_VOICE_MS` | `150` | Voz mínima (energía) para considerar que hubo respuesta |
+| `CX9_SPECULATIVE_FOLLOWUP` | `true` | Al cerrar por silencio, decide la repregunta con el último parcial mientras corre el STT final; se usa solo si el final se parece ≥ 0,9. `false` o `0` lo apaga |
 | `CX9_SHUTDOWN_TIMEOUT` | `20s` | Tope del apagado ordenado |
 | `CX9_DATA_DIR` | `data` | Audio guardado con `save_audio` (`/data` en la imagen) |
 | `CX9_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
