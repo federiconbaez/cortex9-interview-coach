@@ -1,0 +1,1532 @@
+openapi: 3.1.0
+info:
+  title: CORTEX-9 Interview Coach API
+  version: 1.0.0
+  summary: API del backend del simulador de entrevistas por voz (solo para práctica).
+  description: |
+    API REST y WebSocket del backend (`/backend`, Go). El contrato humano completo,
+    con diagramas, políticas y ejemplos, está en `docs/contract.md`; los tipos
+    TypeScript de los mensajes WS están en `docs/ws-types.ts`.
+
+    **Solo práctica.** La app hace de entrevistadora. No existe ningún endpoint ni
+    mensaje para escuchar a un entrevistador real, capturar audio del sistema o de
+    otra persona, ni para sugerir respuestas en vivo. La devolución (informe) solo
+    está disponible después de que la sesión terminó (`409` antes).
+
+    Errores: RFC 9457 (`application/problem+json`). Versionado por prefijo `/v1`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://127.0.0.1:8080
+    description: Backend local (dev)
+tags:
+  - name: auth
+  - name: scenarios
+  - name: languages
+  - name: profile
+  - name: sessions
+  - name: reports
+  - name: live
+  - name: llm
+  - name: ops
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+paths:
+  /v1/health:
+    get:
+      tags: [ops]
+      operationId: getHealth
+      summary: Liveness (el proceso responde)
+      security: []
+      responses:
+        '200':
+          description: Vivo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /v1/ready:
+    get:
+      tags: [ops]
+      operationId: getReady
+      summary: Readiness (base de datos, servicio de voz, proveedor LLM por defecto)
+      security: []
+      responses:
+        '200':
+          description: Listo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Alguna dependencia obligatoria no está lista
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /metrics:
+    get:
+      tags: [ops]
+      operationId: getMetrics
+      summary: Métricas Prometheus (formato de exposición de texto). Sin versionar.
+      description: Solo escucha en 127.0.0.1 o en la red interna de docker-compose. Sin auth.
+      security: []
+      responses:
+        '200':
+          description: Métricas
+          content:
+            text/plain; version=0.0.4:
+              schema: { type: string }
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Login del único usuario local
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Autenticado. Devuelve el token y además fija la cookie `cx9_session`.
+          headers:
+            Set-Cookie:
+              description: '`cx9_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200` (+ `Secure` fuera de localhost)'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoca el token actual y borra la cookie
+      responses:
+        '204': { description: Sesión cerrada }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/auth/me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: Estado de la autenticación actual
+      responses:
+        '200':
+          description: Autenticado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/languages:
+    get:
+      tags: [languages]
+      operationId: listLanguages
+      summary: Idiomas disponibles (texto de escenarios, STT y voces TTS)
+      responses:
+        '200':
+          description: Idiomas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Language' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/scenarios:
+    get:
+      tags: [scenarios]
+      operationId: listScenarios
+      summary: Lista escenarios (incluidos y propios)
+      parameters:
+        - name: lang
+          in: query
+          description: Idioma para `title` resuelto; si falta, devuelve todos los títulos.
+          schema: { $ref: '#/components/schemas/Lang' }
+      responses:
+        '200':
+          description: Escenarios
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ScenarioSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [scenarios]
+      operationId: createScenario
+      summary: Crea un escenario propio (YAML o JSON con el mismo esquema)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { $ref: '#/components/schemas/Scenario' }
+          application/json:
+            schema: { $ref: '#/components/schemas/Scenario' }
+      responses:
+        '201':
+          description: Creado
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Scenario' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /v1/scenarios/validate:
+    post:
+      tags: [scenarios]
+      operationId: validateScenario
+      summary: Valida un escenario sin guardarlo
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { $ref: '#/components/schemas/Scenario' }
+          application/json:
+            schema: { $ref: '#/components/schemas/Scenario' }
+      responses:
+        '200':
+          description: Válido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Scenario' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /v1/scenarios/{scenarioId}:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    get:
+      tags: [scenarios]
+      operationId: getScenario
+      summary: Obtiene un escenario (JSON o YAML según `Accept`)
+      responses:
+        '200':
+          description: Escenario
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Scenario' }
+            application/yaml:
+              schema: { $ref: '#/components/schemas/Scenario' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [scenarios]
+      operationId: replaceScenario
+      summary: Reemplaza un escenario propio (los incluidos son de solo lectura)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { $ref: '#/components/schemas/Scenario' }
+          application/json:
+            schema: { $ref: '#/components/schemas/Scenario' }
+      responses:
+        '200':
+          description: Reemplazado
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Scenario' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [scenarios]
+      operationId: deleteScenario
+      summary: Borra un escenario propio
+      responses:
+        '204': { description: Borrado }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/profile:
+    get:
+      tags: [profile]
+      operationId: getProfile
+      summary: Perfil del modo historia
+      responses:
+        '200':
+          description: Perfil
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [profile]
+      operationId: createProfile
+      summary: Crea el perfil (409 si ya existe; hay uno solo)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileInput' }
+      responses:
+        '201':
+          description: Creado
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    put:
+      tags: [profile]
+      operationId: replaceProfile
+      summary: Reemplaza el perfil completo (crea si no existe)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileInput' }
+      responses:
+        '200':
+          description: Reemplazado
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    patch:
+      tags: [profile]
+      operationId: patchProfile
+      summary: Modifica parcialmente el perfil (JSON Merge Patch, RFC 7396)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/ProfilePatch' }
+      responses:
+        '200':
+          description: Modificado
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [profile]
+      operationId: deleteProfile
+      summary: Borra el perfil y su evidencia
+      responses:
+        '204': { description: Borrado }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/profile/gaps:
+    get:
+      tags: [profile]
+      operationId: getProfileGaps
+      summary: Preguntas que faltan para completar el perfil (las usa el modo historia)
+      parameters:
+        - name: lang
+          in: query
+          schema: { $ref: '#/components/schemas/Lang' }
+      responses:
+        '200':
+          description: Huecos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProfileGap' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: Historial de sesiones con filtros y paginación por cursor
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/SessionStatus' } }
+        - { name: scenario_id, in: query, schema: { type: string } }
+        - { name: lang, in: query, schema: { $ref: '#/components/schemas/Lang' } }
+        - { name: mode, in: query, schema: { $ref: '#/components/schemas/SessionMode' } }
+        - { name: from, in: query, description: 'created_at >= from (RFC 3339)', schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: 'created_at < to (RFC 3339)', schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: cursor, in: query, description: Cursor opaco de `next_cursor`, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at_desc, created_at_asc], default: created_at_desc } }
+      responses:
+        '200':
+          description: Página de sesiones
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [sessions]
+      operationId: createSession
+      summary: Crea una sesión de práctica o del modo historia
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSessionRequest' }
+      responses:
+        '201':
+          description: Creada
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /v1/sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: Sesión con sus turnos (transcripción)
+      responses:
+        '200':
+          description: Sesión
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [sessions]
+      operationId: deleteSession
+      summary: Borra una sesión terminada, su informe y su audio
+      responses:
+        '204': { description: Borrada }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/sessions/{sessionId}/end:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [sessions]
+      operationId: endSession
+      summary: Finaliza la sesión (idempotente) y dispara el scoring
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, enum: [user, timeout, error], default: user }
+      responses:
+        '200':
+          description: Terminada (o ya estaba terminada; mismo cuerpo)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/sessions/{sessionId}/report:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [reports]
+      operationId: getReport
+      summary: Informe con scoring (JSON o Markdown según `Accept`)
+      description: |
+        `409` si la sesión no terminó (no hay devolución en vivo). `202` con `Retry-After`
+        mientras se calcula. Campos sin datos: texto `[FALTA: …]`, numéricos `null` con su
+        entrada en `faltantes`. `top3` tiene exactamente 3 elementos.
+      responses:
+        '200':
+          description: Informe listo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+            text/markdown:
+              schema: { type: string }
+        '202':
+          description: Calculando
+          headers:
+            Retry-After: { $ref: '#/components/headers/RetryAfter' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/sessions/{sessionId}/live-ticket:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [live]
+      operationId: createLiveTicket
+      summary: Ticket de un solo uso (60 s) para abrir el WebSocket sin cookie
+      responses:
+        '201':
+          description: Ticket
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LiveTicket' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/sessions/{sessionId}/live:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [live]
+      operationId: openLive
+      summary: WebSocket de la sesión en vivo (upgrade RFC 6455)
+      description: |
+        Subprotocolo obligatorio `cx9.live.v1`. Auth por cookie `cx9_session` o `?ticket=`.
+        Se valida `Origin`. Mensajes de texto: sobres JSON (`WsEnvelope`). Mensajes binarios:
+        header de 20 bytes + audio (ver `docs/contract.md` §5.4). Formato base fijo:
+        PCM16LE 16 kHz mono. Los esquemas de cada mensaje están en `components.schemas`
+        (`Ws*`) y en `docs/ws-types.ts`.
+      security:
+        - cookieAuth: []
+        - {}
+      parameters:
+        - name: ticket
+          in: query
+          schema: { type: string }
+        - name: Upgrade
+          in: header
+          required: true
+          schema: { type: string, const: websocket }
+        - name: Sec-WebSocket-Protocol
+          in: header
+          required: true
+          schema: { type: string, const: cx9.live.v1 }
+      responses:
+        '101':
+          description: Switching Protocols
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '426':
+          description: Falta el upgrade a WebSocket o el subprotocolo
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /v1/sessions/{sessionId}/tts/{utteranceId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - name: utteranceId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [live]
+      operationId: getTtsAudio
+      summary: Audio TTS de una intervención (cuando `tts_delivery = url`)
+      responses:
+        '200':
+          description: Audio
+          headers:
+            X-Audio-Duration-Ms: { schema: { type: integer } }
+          content:
+            audio/wav:
+              schema: { type: string, contentMediaType: audio/wav }
+            audio/ogg:
+              schema: { type: string, contentMediaType: audio/ogg }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/llm/providers:
+    get:
+      tags: [llm]
+      operationId: listLlmProviders
+      summary: Proveedores LLM y su estado (nunca devuelve claves)
+      responses:
+        '200':
+          description: Proveedores
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, default]
+                properties:
+                  default: { $ref: '#/components/schemas/LlmProviderId' }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LlmProvider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token opaco devuelto por /v1/auth/login
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: cx9_session
+
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ScenarioId:
+      name: scenarioId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Slug' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 'Recomendado. 8-128 chars [A-Za-z0-9_-]. Se guarda 24 h por (método, ruta, clave, hash del cuerpo).'
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{8,128}$' }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: ETag fuerte. Si se envía y no coincide, 412.
+      schema: { type: string }
+
+  headers:
+    Location:
+      schema: { type: string, format: uri-reference }
+    ETag:
+      schema: { type: string }
+    RetryAfter:
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: Petición mal formada
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Sin autenticación válida
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Prohibido (p. ej. escenario incluido de solo lectura u Origin no permitido)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: No existe
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Conflicto de estado o de idempotencia
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PreconditionFailed:
+      description: If-Match no coincide
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    UnsupportedMediaType:
+      description: Content-Type no soportado
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unprocessable:
+      description: Validación fallida (detalle por campo en `errors`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: Demasiados intentos
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Lang:
+      type: string
+      enum: [es, en]
+    Slug:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{1,62}$'
+    I18nText:
+      type: object
+      description: Texto por idioma; `es` o `en` (al menos uno).
+      minProperties: 1
+      properties:
+        es: { type: string, minLength: 1 }
+        en: { type: string, minLength: 1 }
+      additionalProperties: false
+    Problem:
+      type: object
+      description: RFC 9457 problem details con extensiones `code`, `request_id` y `errors`.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, examples: ['urn:cx9:problem:validation-failed'] }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        request_id: { type: string }
+        retryable: { type: boolean }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [pointer, message]
+            properties:
+              pointer: { type: string, description: JSON Pointer (RFC 6901) }
+              message: { type: string }
+    ErrorCode:
+      type: string
+      enum:
+        - BAD_REQUEST
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - ORIGIN_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - STATE_CONFLICT
+        - IDEMPOTENCY_IN_PROGRESS
+        - IDEMPOTENCY_KEY_REUSED
+        - PRECONDITION_FAILED
+        - READ_ONLY
+        - UNSUPPORTED_MEDIA_TYPE
+        - PAYLOAD_TOO_LARGE
+        - RATE_LIMITED
+        - SESSION_NOT_ENDED
+        - INTERNAL
+        - DEPENDENCY_UNAVAILABLE
+        - DEPENDENCY_TIMEOUT
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        version: { type: string }
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            required: [status]
+            properties:
+              status: { type: string, enum: [ok, degraded, down] }
+              latency_ms: { type: integer }
+              detail: { type: string }
+    LoginRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, writeOnly: true }
+    LoginResponse:
+      type: object
+      required: [token, expires_at]
+      properties:
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+    Me:
+      type: object
+      required: [user, expires_at]
+      properties:
+        user: { type: string, const: local }
+        expires_at: { type: string, format: date-time }
+    Language:
+      type: object
+      required: [code, name, stt, tts_voices, scenarios]
+      properties:
+        code: { $ref: '#/components/schemas/Lang' }
+        name: { type: string, examples: [Español] }
+        stt: { type: boolean, description: El servicio de voz transcribe este idioma }
+        tts_voices:
+          type: array
+          items: { type: string, examples: [es_AR-daniela-high] }
+        default_voice: { type: [string, 'null'] }
+        slow_speech: { type: boolean, description: 'La entrevistadora habla más lento (en=true)' }
+        english_feedback: { type: boolean, description: 'El informe incluye gramática y pronunciación' }
+        scenarios: { type: integer, description: Escenarios con texto en este idioma }
+    Probe:
+      type: string
+      enum: [numbers, example, why, ownership, result]
+    ScenarioQuestion:
+      type: object
+      required: [id, text]
+      properties:
+        id: { $ref: '#/components/schemas/Slug' }
+        text: { $ref: '#/components/schemas/I18nText' }
+        probes:
+          type: array
+          items: { $ref: '#/components/schemas/Probe' }
+          default: [numbers, example, why]
+        keywords:
+          type: array
+          items: { type: string }
+        star: { type: boolean, default: true }
+        expects_numbers: { type: boolean, default: true }
+    Scenario:
+      type: object
+      description: Mismo esquema que los YAML de interview-sim.
+      required: [id, title, questions]
+      properties:
+        id: { $ref: '#/components/schemas/Slug' }
+        title: { $ref: '#/components/schemas/I18nText' }
+        style: { type: string, default: entrevista }
+        max_followups: { type: integer, minimum: 0, maximum: 2, default: 2 }
+        ideal_seconds:
+          type: array
+          items: { type: number, minimum: 0 }
+          minItems: 2
+          maxItems: 2
+          default: [40, 120]
+        followup_ideal_seconds:
+          type: array
+          items: { type: number, minimum: 0 }
+          minItems: 2
+          maxItems: 2
+          default: [15, 75]
+        intro: { $ref: '#/components/schemas/I18nText' }
+        closing: { $ref: '#/components/schemas/I18nText' }
+        questions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ScenarioQuestion' }
+        builtin: { type: boolean, readOnly: true }
+        languages:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/Lang' }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    ScenarioSummary:
+      type: object
+      required: [id, title, builtin, languages, question_count]
+      properties:
+        id: { $ref: '#/components/schemas/Slug' }
+        title:
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/I18nText'
+        style: { type: string }
+        builtin: { type: boolean }
+        languages:
+          type: array
+          items: { $ref: '#/components/schemas/Lang' }
+        question_count: { type: integer }
+        max_followups: { type: integer, minimum: 0, maximum: 2 }
+    Evidence:
+      type: object
+      description: Cita literal del candidato que respalda un dato. Sin cita no se guarda.
+      required: [quote]
+      properties:
+        quote: { type: string, minLength: 8 }
+        session_id: { type: [string, 'null'], format: uuid }
+        turn_id: { type: [string, 'null'] }
+    Experience:
+      type: object
+      required: [company]
+      properties:
+        company: { type: string, minLength: 1 }
+        role: { type: string }
+        period: { type: string }
+        technologies: { type: array, items: { type: string } }
+        frameworks: { type: array, items: { type: string } }
+        achievements: { type: array, items: { type: string } }
+        problems: { type: array, items: { type: string } }
+        reason_for_change: { type: string }
+        evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+    Education:
+      type: object
+      required: [institution]
+      properties:
+        institution: { type: string, minLength: 1 }
+        degree: { type: string }
+        status: { type: string }
+        evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+    ProfileInput:
+      type: object
+      properties:
+        experiences: { type: array, items: { $ref: '#/components/schemas/Experience' } }
+        education: { type: array, items: { $ref: '#/components/schemas/Education' } }
+        skills: { type: array, items: { type: string } }
+      additionalProperties: false
+    ProfilePatch:
+      type: object
+      description: JSON Merge Patch (RFC 7396). Los arrays se reemplazan completos; `null` borra.
+      properties:
+        experiences: { type: [array, 'null'], items: { $ref: '#/components/schemas/Experience' } }
+        education: { type: [array, 'null'], items: { $ref: '#/components/schemas/Education' } }
+        skills: { type: [array, 'null'], items: { type: string } }
+      additionalProperties: false
+    Profile:
+      allOf:
+        - $ref: '#/components/schemas/ProfileInput'
+        - type: object
+          required: [version, updated_at, experiences, education, skills]
+          properties:
+            version: { type: integer, const: 1 }
+            updated_at: { type: [string, 'null'], format: date-time }
+    ProfileGap:
+      type: object
+      required: [id, field, text]
+      properties:
+        id: { type: string, examples: [h-recorrido] }
+        company: { type: [string, 'null'] }
+        field: { type: string }
+        text: { type: string }
+    LlmProviderId:
+      type: string
+      enum: [openai, anthropic, xai, ollama, mock]
+    LlmProvider:
+      type: object
+      required: [id, name, configured, available, local, default_model, breaker]
+      properties:
+        id: { $ref: '#/components/schemas/LlmProviderId' }
+        name: { type: string }
+        configured: { type: boolean, description: 'La clave/URL está definida (nunca se devuelve el valor)' }
+        available: { type: boolean }
+        local: { type: boolean, description: 'true = el texto no sale de la máquina (ollama, mock)' }
+        default_model: { type: string }
+        breaker: { type: string, enum: [closed, open, half_open] }
+        reason: { type: [string, 'null'] }
+    SessionMode:
+      type: string
+      enum: [practice, story]
+    InputMode:
+      type: string
+      enum: [voice, text]
+    SessionStatus:
+      type: string
+      description: 'created → live ⇄ detached → ended → scoring → completed | failed'
+      enum: [created, live, detached, ended, scoring, completed, failed]
+    CreateSessionRequest:
+      type: object
+      required: [lang, mode]
+      properties:
+        scenario_id: { $ref: '#/components/schemas/Slug', description: 'Obligatorio en mode=practice; ignorado en story' }
+        lang: { $ref: '#/components/schemas/Lang' }
+        mode: { $ref: '#/components/schemas/SessionMode' }
+        input: { $ref: '#/components/schemas/InputMode', default: voice }
+        llm_provider: { $ref: '#/components/schemas/LlmProviderId' }
+        llm_model: { type: string }
+        num_questions: { type: integer, minimum: 1, maximum: 50 }
+        shuffle: { type: boolean, default: false }
+        max_followups: { type: integer, minimum: 0, maximum: 2, default: 2 }
+        think_pause_ms: { type: integer, minimum: 0, maximum: 30000, default: 0 }
+        learn_profile: { type: boolean, default: false, description: 'Equivale a --aprender' }
+        save_audio: { type: boolean, default: false }
+        voice: { type: string }
+    Session:
+      type: object
+      required: [id, status, mode, lang, input, llm_provider, created_at, live_url]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        mode: { $ref: '#/components/schemas/SessionMode' }
+        scenario_id: { type: [string, 'null'] }
+        scenario_title: { type: [string, 'null'] }
+        lang: { $ref: '#/components/schemas/Lang' }
+        input: { $ref: '#/components/schemas/InputMode' }
+        llm_provider: { $ref: '#/components/schemas/LlmProviderId' }
+        llm_model: { type: string }
+        max_followups: { type: integer, minimum: 0, maximum: 2 }
+        question_count: { type: integer }
+        questions_answered: { type: integer }
+        ended_reason: { type: [string, 'null'], enum: [user, completed, disconnected, timeout, error, null] }
+        overall_score: { type: [number, 'null'], minimum: 1, maximum: 5 }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        ended_at: { type: [string, 'null'], format: date-time }
+        live_url: { type: string, examples: ['/v1/sessions/0193.../live'] }
+        report_url: { type: [string, 'null'] }
+    Turn:
+      type: object
+      required: [id, question_id, kind, question, answer]
+      properties:
+        id: { type: string, examples: [t-03-1] }
+        question_id: { type: string }
+        kind: { type: string, enum: [main, followup] }
+        followup_index: { type: integer, minimum: 0, maximum: 2 }
+        probe: { type: [string, 'null'] }
+        question: { type: string }
+        answer: { type: string }
+        duration_s: { type: number }
+        duration_estimated: { type: boolean }
+        low_confidence: { type: array, items: { type: string } }
+        skipped: { type: boolean }
+    SessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Session'
+        - type: object
+          required: [turns]
+          properties:
+            turns: { type: array, items: { $ref: '#/components/schemas/Turn' } }
+            llm_errors: { type: array, items: { type: string } }
+    SessionPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        next_cursor: { type: [string, 'null'] }
+        total: { type: integer }
+    LiveTicket:
+      type: object
+      required: [ticket, expires_at, url]
+      properties:
+        ticket: { type: string }
+        expires_at: { type: string, format: date-time }
+        url: { type: string, examples: ['/v1/sessions/0193.../live?ticket=...'] }
+
+    Dimension:
+      type: string
+      enum: [claridad, estructura, concrecion, duracion, muletillas, relevancia]
+    Score:
+      type: [integer, 'null']
+      minimum: 1
+      maximum: 5
+      description: 'null = no aplica o sin datos (ver `faltantes`)'
+    DimensionScores:
+      type: object
+      required: [claridad, estructura, concrecion, duracion, muletillas, relevancia]
+      properties:
+        claridad: { $ref: '#/components/schemas/Score' }
+        estructura: { $ref: '#/components/schemas/Score' }
+        concrecion: { $ref: '#/components/schemas/Score' }
+        duracion: { $ref: '#/components/schemas/Score' }
+        muletillas: { $ref: '#/components/schemas/Score' }
+        relevancia: { $ref: '#/components/schemas/Score' }
+    DimensionMeans:
+      type: object
+      required: [claridad, estructura, concrecion, duracion, muletillas, relevancia]
+      properties:
+        claridad: { type: [number, 'null'] }
+        estructura: { type: [number, 'null'] }
+        concrecion: { type: [number, 'null'] }
+        duracion: { type: [number, 'null'] }
+        muletillas: { type: [number, 'null'] }
+        relevancia: { type: [number, 'null'] }
+    TurnScore:
+      type: object
+      required: [turn_id, kind, question, answer, dims, overall, details, score_source]
+      properties:
+        turn_id: { type: string }
+        kind: { type: string, enum: [main, followup] }
+        probe: { type: [string, 'null'] }
+        question: { type: string }
+        answer: { type: string, description: 'Texto literal o "[FALTA: sin respuesta]"' }
+        dims: { $ref: '#/components/schemas/DimensionScores' }
+        overall: { type: [number, 'null'] }
+        score_source: { type: string, enum: [llm, heuristica, mixta] }
+        comment: { type: string, description: 'Texto o "[FALTA: …]"' }
+        details:
+          type: object
+          required: [segundos, segundos_estimados, ideal_segundos, palabras, muletillas, muletillas_cada_100, numeros, star]
+          properties:
+            segundos: { type: number }
+            segundos_estimados: { type: boolean }
+            ideal_segundos: { type: array, items: { type: number }, minItems: 2, maxItems: 2 }
+            palabras: { type: integer }
+            muletillas: { type: array, items: { type: string } }
+            muletillas_cada_100: { type: number }
+            numeros: { type: array, items: { type: string } }
+            star:
+              type: object
+              required: [S, T, A, R]
+              properties:
+                S: { type: boolean }
+                T: { type: boolean }
+                A: { type: boolean }
+                R: { type: boolean }
+        low_confidence: { type: array, items: { type: string } }
+    ImprovedAnswer:
+      type: object
+      required: [text, source, missing, rejected_terms]
+      properties:
+        text: { type: string, description: 'Solo con lo que dijo el candidato; huecos como "[FALTA: …]"' }
+        source: { type: string, enum: [llm, reordenamiento, falta] }
+        missing: { type: array, items: { type: string, pattern: '^\[FALTA' } }
+        rejected_terms: { type: array, items: { type: string } }
+    EnglishFeedback:
+      type: object
+      required: [grammar, tips, low_confidence]
+      properties:
+        grammar:
+          type: array
+          items:
+            type: object
+            required: [original, corrected, explanation]
+            properties:
+              original: { type: string }
+              corrected: { type: string }
+              explanation: { type: string }
+        tips: { type: array, items: { type: string } }
+        low_confidence: { type: array, items: { type: string } }
+    ReportBlock:
+      type: object
+      required: [question_id, question, turns, improved]
+      properties:
+        question_id: { type: string }
+        question: { type: string }
+        turns: { type: array, items: { $ref: '#/components/schemas/TurnScore' } }
+        improved: { $ref: '#/components/schemas/ImprovedAnswer' }
+        english: { oneOf: [ { $ref: '#/components/schemas/EnglishFeedback' }, { type: 'null' } ] }
+    PracticeItem:
+      type: object
+      required: [rank, dimension, mean, advice]
+      properties:
+        rank: { type: integer, minimum: 1, maximum: 3 }
+        dimension: { oneOf: [ { $ref: '#/components/schemas/Dimension' }, { type: string, const: '[FALTA]' } ] }
+        mean: { type: [number, 'null'] }
+        advice: { type: string, description: 'Consejo o "[FALTA: no hay suficientes respuestas para elegir un foco]"' }
+    Report:
+      type: object
+      required: [session_id, scenario_title, lang, mode, llm, started_at, ended_at, ended_by_user, questions_answered, top3, dim_means, overall, blocks, faltantes, disclaimer]
+      properties:
+        session_id: { type: string, format: uuid }
+        scenario_id: { type: [string, 'null'] }
+        scenario_title: { type: string }
+        lang: { $ref: '#/components/schemas/Lang' }
+        mode: { $ref: '#/components/schemas/SessionMode' }
+        llm: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        ended_by_user: { type: boolean }
+        questions_answered: { type: integer }
+        top3:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { $ref: '#/components/schemas/PracticeItem' }
+        dim_means: { $ref: '#/components/schemas/DimensionMeans' }
+        overall: { type: [number, 'null'] }
+        blocks: { type: array, items: { $ref: '#/components/schemas/ReportBlock' } }
+        profile_changes: { type: array, items: { type: string } }
+        llm_errors: { type: array, items: { type: string } }
+        faltantes:
+          type: array
+          description: 'Un elemento por campo sin datos, p. ej. "[FALTA] blocks[2].turns[0].dims.concrecion: no dijo ningún número"'
+          items: { type: string, pattern: '^\[FALTA' }
+        disclaimer: { type: string }
+
+    # ---------------- WebSocket /v1/sessions/{id}/live ----------------
+    WsEnvelope:
+      type: object
+      description: Sobre común de todo mensaje JSON del WS.
+      required: [v, type, seq, ts, session_id]
+      properties:
+        v: { type: integer, const: 1 }
+        type: { type: string }
+        seq: { type: integer, minimum: 1, description: 'Monótono por dirección, sin huecos; binarios incluidos' }
+        ts: { type: string, format: date-time }
+        session_id: { type: string, format: uuid }
+        ack: { type: integer, minimum: 0, description: 'Solo servidor→cliente: último seq del cliente procesado' }
+        data: { type: object }
+    AudioFormat:
+      type: object
+      required: [codec, sample_rate, channels]
+      properties:
+        codec: { type: string, enum: [pcm16le, opus] }
+        sample_rate: { type: integer, enum: [16000, 48000], description: 'pcm16le=16000 fijo; opus=48000' }
+        channels: { type: integer, const: 1 }
+        frame_ms: { type: integer, enum: [20, 40, 60, 100], default: 100 }
+    WsHello:
+      description: 'cliente→servidor, primer mensaje obligatorio (≤5 s)'
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: hello }
+            data:
+              type: object
+              required: [client, audio_formats, tts_delivery]
+              properties:
+                client: { type: string }
+                audio_formats: { type: array, minItems: 1, items: { $ref: '#/components/schemas/AudioFormat' } }
+                tts_delivery: { type: array, items: { type: string, enum: [binary, url, none] } }
+                tts_formats: { type: array, items: { type: string, enum: [pcm16le, wav, opus] } }
+                partials: { type: boolean, default: true }
+                resume:
+                  type: [object, 'null']
+                  required: [last_server_seq]
+                  properties:
+                    last_server_seq: { type: integer, minimum: 0 }
+    WsSessionReady:
+      description: servidor→cliente, respuesta a hello
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: session.ready }
+            data:
+              type: object
+              required: [state, audio_format, tts_delivery, heartbeat_ms, idle_timeout_ms, max_inflight_bytes, max_turn_ms, resumed, last_client_seq]
+              properties:
+                state: { $ref: '#/components/schemas/WsSessionState' }
+                audio_format: { $ref: '#/components/schemas/AudioFormat' }
+                tts_delivery: { type: string, enum: [binary, url, none] }
+                tts_format: { type: string, enum: [pcm16le, wav, opus] }
+                heartbeat_ms: { type: integer, const: 15000 }
+                idle_timeout_ms: { type: integer, const: 45000 }
+                max_inflight_bytes: { type: integer }
+                max_turn_ms: { type: integer }
+                resumed: { type: boolean }
+                last_client_seq: { type: integer }
+                question_index: { type: integer }
+                question_count: { type: integer }
+    WsSessionState:
+      type: string
+      enum: [ready, intro, asking, listening, processing, paused, closing, ended]
+    WsQuestion:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: question }
+            data:
+              type: object
+              required: [turn_id, question_id, index, total, text, lang, utterance_id]
+              properties:
+                turn_id: { type: string }
+                question_id: { type: string }
+                index: { type: integer, minimum: 1 }
+                total: { type: integer }
+                text: { type: string }
+                lang: { $ref: '#/components/schemas/Lang' }
+                utterance_id: { type: string }
+                kind: { type: string, enum: [intro, main, closing, repeat], default: main }
+    WsFollowup:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: followup }
+            data:
+              type: object
+              required: [turn_id, question_id, followup_index, max_followups, probe, text, utterance_id]
+              properties:
+                turn_id: { type: string }
+                question_id: { type: string }
+                followup_index: { type: integer, minimum: 1, maximum: 2 }
+                max_followups: { type: integer, minimum: 0, maximum: 2 }
+                probe: { type: string, enum: [numbers, example, why, ownership, result, other] }
+                text: { type: string }
+                utterance_id: { type: string }
+    WsTtsAudio:
+      description: 'Anuncia audio TTS; si delivery=binary, siguen frames binarios kind=0x02'
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: tts.audio }
+            data:
+              type: object
+              required: [utterance_id, format, sample_rate, duration_ms, chunks, bytes]
+              properties:
+                utterance_id: { type: string }
+                format: { type: string, enum: [pcm16le, wav, opus] }
+                sample_rate: { type: integer }
+                duration_ms: { type: integer }
+                chunks: { type: integer }
+                bytes: { type: integer }
+                sha256: { type: string }
+    WsTtsUrl:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: tts.url }
+            data:
+              type: object
+              required: [utterance_id, url, format, duration_ms, expires_at]
+              properties:
+                utterance_id: { type: string }
+                url: { type: string }
+                format: { type: string, enum: [wav, opus] }
+                duration_ms: { type: integer }
+                expires_at: { type: string, format: date-time }
+    WsTranscriptPartial:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: transcript.partial }
+            data:
+              type: object
+              required: [turn_id, text, revision, audio_ms]
+              properties:
+                turn_id: { type: string }
+                text: { type: string }
+                revision: { type: integer, minimum: 1 }
+                audio_ms: { type: integer }
+    WsTranscriptFinal:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: transcript.final }
+            data:
+              type: object
+              required: [turn_id, text, duration_ms, confidence, low_confidence, source]
+              properties:
+                turn_id: { type: string }
+                text: { type: string }
+                duration_ms: { type: integer }
+                confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+                low_confidence: { type: array, items: { type: string } }
+                source: { type: string, enum: [stt, text] }
+    WsPause:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: pause }
+            data:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [user, think_time, reconnect] }
+                resume_after_ms: { type: [integer, 'null'] }
+                max_pause_ms: { type: integer }
+    WsResume:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: resume }
+            data:
+              type: object
+              required: [state]
+              properties:
+                state: { $ref: '#/components/schemas/WsSessionState' }
+    WsTurnEnd:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: turn.end }
+            data:
+              type: object
+              required: [turn_id, reason, next, followups_used, max_followups]
+              properties:
+                turn_id: { type: string }
+                reason: { type: string, enum: [audio_end, text, skip, max_duration, no_audio, repeat] }
+                next: { type: string, enum: [followup, question, repeat, end] }
+                followups_used: { type: integer, minimum: 0, maximum: 2 }
+                max_followups: { type: integer, minimum: 0, maximum: 2 }
+    WsSessionEnd:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: session.end }
+            data:
+              type: object
+              required: [reason, summary, report_url]
+              properties:
+                reason: { type: string, enum: [completed, user, disconnected, timeout, error] }
+                report_url: { type: string }
+                summary:
+                  type: object
+                  required: [questions_asked, questions_answered, followups_asked, skipped, total_answer_ms, report_status]
+                  properties:
+                    questions_asked: { type: integer }
+                    questions_answered: { type: integer }
+                    followups_asked: { type: integer }
+                    skipped: { type: integer }
+                    total_answer_ms: { type: integer }
+                    report_status: { type: string, enum: [scoring, completed, failed] }
+    WsErrorCode:
+      type: string
+      enum:
+        - AUTH_FAILED
+        - SESSION_NOT_FOUND
+        - SESSION_ENDED
+        - ALREADY_CONNECTED
+        - HELLO_REQUIRED
+        - INVALID_MESSAGE
+        - UNSUPPORTED_MESSAGE
+        - UNSUPPORTED_FORMAT
+        - SEQ_OUT_OF_ORDER
+        - RESUME_GAP
+        - STATE_CONFLICT
+        - BACKPRESSURE
+        - AUDIO_TOO_LONG
+        - NO_AUDIO
+        - STT_UNAVAILABLE
+        - STT_TIMEOUT
+        - TTS_UNAVAILABLE
+        - LLM_DEGRADED
+        - INTERNAL
+    WsError:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: error }
+            data:
+              type: object
+              required: [code, message, fatal, retryable]
+              properties:
+                code: { $ref: '#/components/schemas/WsErrorCode' }
+                message: { type: string }
+                fatal: { type: boolean, description: 'true = el servidor cierra a continuación' }
+                retryable: { type: boolean }
+                ref_seq: { type: [integer, 'null'] }
+                close_code: { type: [integer, 'null'] }
+    WsPing:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: ping }
+            data:
+              type: object
+              required: [nonce]
+              properties:
+                nonce: { type: string }
+    WsPong:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: pong }
+            data:
+              type: object
+              required: [nonce]
+              properties:
+                nonce: { type: string }
+    WsAudioEnd:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: audio.end }
+            data:
+              type: object
+              required: [turn_id, chunks, bytes, duration_ms]
+              properties:
+                turn_id: { type: string }
+                chunks: { type: integer, minimum: 0 }
+                bytes: { type: integer, minimum: 0 }
+                duration_ms: { type: integer, minimum: 0 }
+    WsAudioChunkJson:
+      description: 'Fallback SOLO si el cliente no puede mandar binarios (no recomendado): mismo contenido que el frame binario, en base64.'
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: audio.chunk }
+            data:
+              type: object
+              required: [turn_id, chunk_index, audio_b64]
+              properties:
+                turn_id: { type: string }
+                chunk_index: { type: integer, minimum: 0 }
+                audio_b64: { type: string, contentEncoding: base64 }
+    WsAnswerText:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: answer.text }
+            data:
+              type: object
+              required: [turn_id, text]
+              properties:
+                turn_id: { type: string }
+                text: { type: string, maxLength: 8000 }
+    WsControl:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { enum: [control.pause, control.resume, control.skip, control.end, control.repeat] }
+            data:
+              type: object
+              properties:
+                turn_id: { type: string }
+    WsTtsPlayed:
+      allOf:
+        - $ref: '#/components/schemas/WsEnvelope'
+        - type: object
+          properties:
+            type: { const: tts.played }
+            data:
+              type: object
+              required: [utterance_id]
+              properties:
+                utterance_id: { type: string }
+    WsClientMessage:
+      oneOf:
+        - $ref: '#/components/schemas/WsHello'
+        - $ref: '#/components/schemas/WsAudioChunkJson'
+        - $ref: '#/components/schemas/WsAudioEnd'
+        - $ref: '#/components/schemas/WsAnswerText'
+        - $ref: '#/components/schemas/WsControl'
+        - $ref: '#/components/schemas/WsTtsPlayed'
+        - $ref: '#/components/schemas/WsPing'
+        - $ref: '#/components/schemas/WsPong'
+    WsServerMessage:
+      oneOf:
+        - $ref: '#/components/schemas/WsSessionReady'
+        - $ref: '#/components/schemas/WsQuestion'
+        - $ref: '#/components/schemas/WsFollowup'
+        - $ref: '#/components/schemas/WsTtsAudio'
+        - $ref: '#/components/schemas/WsTtsUrl'
+        - $ref: '#/components/schemas/WsTranscriptPartial'
+        - $ref: '#/components/schemas/WsTranscriptFinal'
+        - $ref: '#/components/schemas/WsPause'
+        - $ref: '#/components/schemas/WsResume'
+        - $ref: '#/components/schemas/WsTurnEnd'
+        - $ref: '#/components/schemas/WsSessionEnd'
+        - $ref: '#/components/schemas/WsError'
+        - $ref: '#/components/schemas/WsPing'
+        - $ref: '#/components/schemas/WsPong'
