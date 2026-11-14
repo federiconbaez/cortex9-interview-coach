@@ -121,7 +121,8 @@ el contrato está en `../../docs/contract.md`; acá va cómo lo implementa el ba
 ## 11. Auth y HTTP
 
 - argon2id (m=64 MiB, t=3, p=2) en formato PHC; 5 logins fallidos por minuto → 429.
-- Cookie `cx9_session` HttpOnly, SameSite=Strict, `Secure` salvo en localhost.
+- Cookie `cx9_session` HttpOnly, SameSite=Strict; `Secure` cuando el `Host` del request no es loopback (independiente de `CX9_ENV`, sin variable para forzarlo).
+- `Origin` (escrituras y WS): sin `Origin` pasa; si no, tiene que ser igual al `Host` del request, puerto incluido (o, fuera de prod, estar en `CX9_CORS_ORIGINS`). Un proxy tiene que pasar el `Host` original.
 - CSRF: `Origin` en métodos de escritura + solo JSON/YAML/merge-patch (415 si no).
 - `/live-ticket` es opcional: un cliente del mismo origen abre el WS con la cookie.
 - Idempotency-Key: alcance método + ruta + clave; el hash del cuerpo incluye el media

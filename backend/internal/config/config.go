@@ -163,5 +163,5 @@ func IsLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Prod dice si corre en producción (CORS apagado, cookie Secure).
+// Prod dice si corre en producción (CORS apagado). El Secure de la cookie depende del Host, no de esto.
 func (c *Config) Prod() bool { return c.Env == "prod" }

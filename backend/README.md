@@ -117,7 +117,7 @@ proveedores solo dice `configured: true/false`).
 | Variable | Default | Descripción |
 |---|---|---|
 | `CX9_HTTP_ADDR` | `:8080` | Dirección de escucha (API, WS y `/metrics`) |
-| `CX9_ENV` | `dev` | `dev` o `prod`. En `prod` CORS se apaga y la cookie siempre es `Secure` |
+| `CX9_ENV` | `dev` | `dev` o `prod`. En `prod` CORS se apaga (solo vale el mismo origen). No cambia la cookie: ver la nota de abajo |
 | `CX9_DATABASE_URL` | `sqlite://cx9.db` | `sqlite://<ruta>` (o `sqlite://:memory:`) o `postgres://…` / `postgresql://…` |
 | `CX9_PASSWORD_HASH` | vacío | Hash argon2id (`coach hash-password`). Sin hash ni `CX9_DEV_NO_AUTH`, el login falla y `/v1/ready` lo informa |
 | `CX9_DEV_NO_AUTH` | `0` | `1` desactiva el login; solo se acepta si `CX9_HTTP_ADDR` es loopback (si no, no arranca) |
@@ -153,6 +153,14 @@ proveedores solo dice `configured: true/false`).
 | `CX9_TEST_DATABASE_URL` | vacío | Solo tests: corre los tests de `internal/store` también contra Postgres |
 
 Duraciones en formato Go (`1.5s`, `2m`, `12h`).
+
+**Cookie `cx9_session` y `Secure`.** Es siempre `HttpOnly`, `SameSite=Strict` y
+`Path=/`. El atributo `Secure` **no** depende de `CX9_ENV`: se pone cuando el `Host` del
+request **no** es loopback (`localhost`, `127.0.0.0/8` o `::1`) y se omite cuando sí lo
+es, en dev y en prod. No hay variable para forzarlo. Detrás de un proxy decide el `Host`
+que llega al backend: con `proxy_set_header Host $http_host` (como el nginx de
+`/deploy`) un acceso por `http://localhost:8080` recibe la cookie sin `Secure` y uno por
+un nombre o IP de red la recibe con `Secure`, así que ese acceso tiene que ser por HTTPS.
 
 ## Operación
 
