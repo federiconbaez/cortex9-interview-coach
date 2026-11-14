@@ -122,3 +122,14 @@ th, td { text-align: left; padding: 0.4rem; border-bottom: 1px solid var(--borde
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 .plain { list-style: none; padding-left: 0; margin: 0.25rem 0; }
+/* Subtítulos en vivo: sin animaciones; el tamaño de letra lo elige el usuario. */
+.captions { list-style: none; padding: 0.5rem; margin: 0; max-height: 55vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.captions .cap { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.captions .cap:last-child { border-bottom: none; }
+.captions .cap-text { margin: 0; }
+.captions .partial .cap-text { font-style: italic; color: var(--muted); }
+.captions .cap-tr { margin: 0.15rem 0 0; font-weight: 600; }
+.captions .cap-meta { margin: 0; font-size: 0.8rem; }
+.remote-notice { border-left: 4px solid var(--warn-fg); font-weight: 600; padding: 0.5rem 0.75rem; }
+.nowrap { flex-wrap: nowrap; }
+meter { width: 8rem; min-height: 1rem; }

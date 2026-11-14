@@ -40,11 +40,17 @@ export default defineConfig({
       env: { MOCK_PORT: '8787' },
     },
     {
+      command: 'node mock-server/captions.mjs',
+      url: 'http://127.0.0.1:18791/health',
+      reuseExistingServer: false,
+      env: { CAPTIONS_MOCK_PORT: '18791' },
+    },
+    {
       command: 'npx vite build && npx vite preview --port 4173 --strictPort',
       url: 'http://127.0.0.1:4173',
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { COACH_BACKEND_URL: MOCK },
+      env: { COACH_BACKEND_URL: MOCK, COACH_CAPTIONS_URL: 'http://127.0.0.1:18791' },
     },
   ],
 });

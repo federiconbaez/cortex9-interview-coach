@@ -51,7 +51,7 @@ describe('i18n', () => {
       import.meta.glob<string>(['../**/*.ts', '../**/*.tsx', '!../**/*.test.*', '!../i18n/es.ts', '!../i18n/en.ts', '!../test/**'], { query: '?raw', import: 'default', eager: true }),
     ).join('\n');
     // Claves armadas en tiempo de ejecución: `conn.${estado}`, `dim.${dimensión}`, etc.
-    const dynamic = ['report.fillersSource.', 'conn.', 'dim.', 'status.', 'probe.', 'wserr.', 'setup.mode.', 'setup.input.', 'lang.', 'profile.achievements', 'profile.problems'];
+    const dynamic = ['captions.conn.', 'captions.closed.', 'captions.err.', 'captions.deviceKind.', 'captions.capture.', 'report.fillersSource.', 'conn.', 'dim.', 'status.', 'probe.', 'wserr.', 'setup.mode.', 'setup.input.', 'lang.', 'profile.achievements', 'profile.problems'];
     const unused = Object.keys(es).filter((k) => !code.includes(`'${k}'`) && !dynamic.some((d) => k.startsWith(d)));
     expect(unused).toEqual([]);
   });
