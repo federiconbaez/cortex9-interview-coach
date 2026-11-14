@@ -1,18 +1,18 @@
 # Cobertura del backend (CX9-6174)
-# Comando: go test -race -count=1 -coverpkg=./... -coverprofile=cover.out ./...
-# Fecha: 2026-11-14 05:35 (America/Buenos_Aires, UTC-3) · go1.27.3 · offline (SQLite, mock de voz y LLM mock)
-# Postgres: los tests de internal/store también pasan con CX9_TEST_DATABASE_URL (Postgres local); no entra en estos números.
+# Comando: go test -race -count=1 -coverpkg=./... -coverprofile=cover.out ./...  (clon limpio en e93acc7)
+# Fecha: 2026-11-14 05:54 (America/Buenos_Aires, UTC-3) · go1.27.3 · offline (SQLite, mock de voz y LLM mock)
+# Postgres: con CX9_TEST_DATABASE_URL (Postgres local) también pasan TestStoreAllDialects/postgres y TestRegressionEmptySTTFillersKeepSTTSource/postgres; no entran en estos números.
 
 ## Por paquete (cobertura combinada de todos los tests)
 cmd/coach                          0.0%  (0/55 sentencias)
 internal/analysis                 93.2%  (165/177 sentencias)
 internal/api                      79.5%  (595/748 sentencias)
-internal/app                      80.3%  (57/71 sentencias)
+internal/app                      81.7%  (58/71 sentencias)
 internal/auth                     94.2%  (49/52 sentencias)
 internal/coach                    73.0%  (224/307 sentencias)
 internal/config                   81.7%  (49/60 sentencias)
-internal/engine                   92.8%  (193/208 sentencias)
-internal/live                     77.5%  (639/824 sentencias)
+internal/engine                   92.9%  (197/212 sentencias)
+internal/live                     77.4%  (638/824 sentencias)
 internal/llm                      86.3%  (272/315 sentencias)
 internal/metrics                  90.9%  (10/11 sentencias)
 internal/profile                  77.9%  (106/136 sentencias)
@@ -24,29 +24,29 @@ internal/secret                   87.5%  (7/8 sentencias)
 internal/speech                   92.1%  (140/152 sentencias)
 internal/speech/speechmock        73.1%  (114/156 sentencias)
 internal/store                    79.8%  (273/342 sentencias)
-TOTAL                             81.1%  (3437/4237 sentencias)
+TOTAL                             81.1%  (3441/4241 sentencias)
 
 ## Resultado de go test
- cmd/coach  coverage: 0.0% of statements
-ok   internal/analysis 1.110s coverage: 3.5% of statements in ./...
-ok   internal/api 8.414s coverage: 74.3% of statements in ./...
-ok   internal/app 1.149s coverage: 9.0% of statements in ./...
-ok   internal/auth 1.758s coverage: 1.1% of statements in ./...
- internal/coach  coverage: 0.0% of statements
-ok   internal/config 1.043s coverage: 1.3% of statements in ./...
-ok   internal/engine 1.039s coverage: 4.5% of statements in ./...
- internal/live  coverage: 0.0% of statements
-ok   internal/llm 3.125s coverage: 8.2% of statements in ./...
- internal/metrics  coverage: 0.0% of statements
-ok   internal/profile 1.077s coverage: 3.4% of statements in ./...
-ok   internal/protocol 1.037s coverage: 0.4% of statements in ./...
-ok   internal/resilience 1.042s coverage: 1.4% of statements in ./...
-ok   internal/scenario 1.044s coverage: 2.0% of statements in ./...
-ok   internal/scoring 1.075s coverage: 13.0% of statements in ./...
-ok   internal/secret 1.029s coverage: 0.2% of statements in ./...
-ok   internal/speech 1.055s coverage: 6.7% of statements in ./...
- internal/speech/speechmock  coverage: 0.0% of statements
-ok   internal/store 1.072s coverage: 5.9% of statements in ./...
+ cmd/coach coverage: 0.0% of statements
+ok   internal/analysis 1.059s coverage: 3.5% of statements in ./...
+ok   internal/api 8.825s coverage: 74.3% of statements in ./...
+ok   internal/app 6.141s coverage: 9.0% of statements in ./...
+ok   internal/auth 1.777s coverage: 1.1% of statements in ./...
+ internal/coach coverage: 0.0% of statements
+ok   internal/config 1.045s coverage: 1.2% of statements in ./...
+ok   internal/engine 1.046s coverage: 4.6% of statements in ./...
+ internal/live coverage: 0.0% of statements
+ok   internal/llm 3.129s coverage: 8.2% of statements in ./...
+ internal/metrics coverage: 0.0% of statements
+ok   internal/profile 1.047s coverage: 3.4% of statements in ./...
+ok   internal/protocol 1.045s coverage: 0.4% of statements in ./...
+ok   internal/resilience 1.050s coverage: 1.4% of statements in ./...
+ok   internal/scenario 1.043s coverage: 2.0% of statements in ./...
+ok   internal/scoring 1.085s coverage: 13.0% of statements in ./...
+ok   internal/secret 1.030s coverage: 0.2% of statements in ./...
+ok   internal/speech 1.057s coverage: 6.7% of statements in ./...
+ internal/speech/speechmock coverage: 0.0% of statements
+ok   internal/store 1.077s coverage: 5.9% of statements in ./...
 
 ## Por función (go tool cover -func)
 cmd/coach/main.go:29: main 0.0%
@@ -146,7 +146,7 @@ internal/api/sessions.go:325: ttsAudio 77.8%
 internal/app/app.go:28: NewLogger 55.6%
 internal/app/app.go:56: Build 73.9%
 internal/app/app.go:89: Shutdown 100.0%
-internal/app/app.go:96: Run 87.9%
+internal/app/app.go:96: Run 90.9%
 internal/app/app.go:141: dbKind 100.0%
 internal/auth/auth.go:33: HashPassword 83.3%
 internal/auth/auth.go:45: VerifyPassword 94.1%
@@ -188,52 +188,53 @@ internal/config/config.go:64: envInt 42.9%
 internal/config/config.go:77: Load 78.8%
 internal/config/config.go:154: IsLoopback 100.0%
 internal/config/config.go:167: Prod 100.0%
-internal/engine/engine.go:121: New 80.0%
-internal/engine/engine.go:131: State 100.0%
-internal/engine/engine.go:132: EndReason 0.0%
-internal/engine/engine.go:133: QuestionIndex 100.0%
-internal/engine/engine.go:134: QuestionCount 100.0%
-internal/engine/engine.go:135: CurrentTurnNo 100.0%
-internal/engine/engine.go:136: CurrentTurnID 100.0%
-internal/engine/engine.go:137: MaxFollowups 100.0%
-internal/engine/engine.go:139: turnID 100.0%
-internal/engine/engine.go:140: uttID 100.0%
-internal/engine/engine.go:143: UtteranceNo 100.0%
-internal/engine/engine.go:145: errOut 100.0%
-internal/engine/engine.go:149: conflict 100.0%
-internal/engine/engine.go:153: question 100.0%
-internal/engine/engine.go:156: promptOut 100.0%
-internal/engine/engine.go:182: Start 85.7%
-internal/engine/engine.go:194: nextQuestion 100.0%
-internal/engine/engine.go:209: askMain 100.0%
-internal/engine/engine.go:221: ThinkElapsed 80.0%
-internal/engine/engine.go:232: PromptDelivered 100.0%
-internal/engine/engine.go:246: AcceptAudio 100.0%
-internal/engine/engine.go:251: EndOfAudio 85.7%
-internal/engine/engine.go:264: AcceptText 85.7%
-internal/engine/engine.go:290: Final 100.0%
-internal/engine/engine.go:323: record 100.0%
-internal/engine/engine.go:346: Retry 100.0%
-internal/engine/engine.go:355: LastTurn 100.0%
-internal/engine/engine.go:363: reask 100.0%
-internal/engine/engine.go:380: DecisionInput 100.0%
-internal/engine/engine.go:402: ApplyDecision 87.5%
-internal/engine/engine.go:435: turnEnd 100.0%
-internal/engine/engine.go:440: advance 100.0%
-internal/engine/engine.go:450: Skip 90.0%
-internal/engine/engine.go:468: Repeat 66.7%
-internal/engine/engine.go:480: Pause 100.0%
-internal/engine/engine.go:489: Resume 85.7%
-internal/engine/engine.go:501: finish 100.0%
-internal/engine/engine.go:511: end 100.0%
-internal/engine/engine.go:518: End 100.0%
-internal/engine/engine.go:527: Summary 100.0%
-internal/engine/engine.go:533: CurrentPrompt 60.0%
+internal/engine/engine.go:124: New 80.0%
+internal/engine/engine.go:134: State 100.0%
+internal/engine/engine.go:135: EndReason 0.0%
+internal/engine/engine.go:136: QuestionIndex 100.0%
+internal/engine/engine.go:137: QuestionCount 100.0%
+internal/engine/engine.go:138: CurrentTurnNo 100.0%
+internal/engine/engine.go:139: CurrentTurnID 100.0%
+internal/engine/engine.go:140: MaxFollowups 100.0%
+internal/engine/engine.go:142: turnID 100.0%
+internal/engine/engine.go:143: uttID 100.0%
+internal/engine/engine.go:146: UtteranceNo 100.0%
+internal/engine/engine.go:148: errOut 100.0%
+internal/engine/engine.go:152: conflict 100.0%
+internal/engine/engine.go:156: question 100.0%
+internal/engine/engine.go:159: promptOut 100.0%
+internal/engine/engine.go:185: Start 85.7%
+internal/engine/engine.go:197: nextQuestion 100.0%
+internal/engine/engine.go:212: askMain 100.0%
+internal/engine/engine.go:224: ThinkElapsed 80.0%
+internal/engine/engine.go:235: PromptDelivered 100.0%
+internal/engine/engine.go:249: AcceptAudio 100.0%
+internal/engine/engine.go:254: EndOfAudio 85.7%
+internal/engine/engine.go:267: AcceptText 85.7%
+internal/engine/engine.go:293: Final 100.0%
+internal/engine/engine.go:326: record 100.0%
+internal/engine/engine.go:349: Retry 100.0%
+internal/engine/engine.go:358: LastTurn 100.0%
+internal/engine/engine.go:366: reask 100.0%
+internal/engine/engine.go:383: DecisionInput 100.0%
+internal/engine/engine.go:405: ApplyDecision 87.5%
+internal/engine/engine.go:438: turnEnd 100.0%
+internal/engine/engine.go:443: advance 100.0%
+internal/engine/engine.go:453: Skip 90.0%
+internal/engine/engine.go:471: Repeat 66.7%
+internal/engine/engine.go:483: Pause 100.0%
+internal/engine/engine.go:492: Resume 85.7%
+internal/engine/engine.go:504: finish 100.0%
+internal/engine/engine.go:514: end 100.0%
+internal/engine/engine.go:521: End 100.0%
+internal/engine/engine.go:530: Summary 100.0%
+internal/engine/engine.go:536: CurrentPrompt 60.0%
+internal/engine/engine.go:549: sttFillers 100.0%
 internal/live/conn.go:50: newConn 100.0%
 internal/live/conn.go:57: touch 100.0%
 internal/live/conn.go:59: idleFor 0.0%
 internal/live/conn.go:63: signal 100.0%
-internal/live/conn.go:71: enqueue 90.0%
+internal/live/conn.go:71: enqueue 80.0%
 internal/live/conn.go:87: heavy 100.0%
 internal/live/conn.go:94: closeAfterFlush 100.0%
 internal/live/conn.go:104: closeNow 0.0%
@@ -403,16 +404,16 @@ internal/scoring/scoring.go:210: DurationScore 85.7%
 internal/scoring/scoring.go:224: FillerScore 66.7%
 internal/scoring/scoring.go:238: NumberScore 100.0%
 internal/scoring/scoring.go:251: Heuristic 93.9%
-internal/scoring/scoring.go:325: overall 100.0%
-internal/scoring/scoring.go:345: scoreTurn 87.0%
-internal/scoring/scoring.go:386: normalizeMissing 88.9%
-internal/scoring/scoring.go:401: improve 80.8%
-internal/scoring/scoring.go:442: containsStr 100.0%
-internal/scoring/scoring.go:451: english 88.2%
-internal/scoring/scoring.go:478: Evaluate 96.6%
-internal/scoring/scoring.go:561: notApplicable 60.0%
-internal/scoring/scoring.go:573: nonNil 100.0%
-internal/scoring/scoring.go:580: top3 100.0%
+internal/scoring/scoring.go:326: overall 100.0%
+internal/scoring/scoring.go:346: scoreTurn 87.0%
+internal/scoring/scoring.go:387: normalizeMissing 88.9%
+internal/scoring/scoring.go:402: improve 80.8%
+internal/scoring/scoring.go:443: containsStr 100.0%
+internal/scoring/scoring.go:452: english 88.2%
+internal/scoring/scoring.go:479: Evaluate 96.6%
+internal/scoring/scoring.go:562: notApplicable 60.0%
+internal/scoring/scoring.go:574: nonNil 100.0%
+internal/scoring/scoring.go:581: top3 100.0%
 internal/secret/secret.go:10: New 100.0%
 internal/secret/secret.go:11: Reveal 100.0%
 internal/secret/secret.go:12: IsSet 100.0%

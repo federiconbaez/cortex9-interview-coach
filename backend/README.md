@@ -90,7 +90,7 @@ La imagen es multi-stage, binario estático (`CGO_ENABLED=0`) sobre
 go vet ./...
 go test -race ./...                                    # todo offline: httptest + cliente WS real
 CX9_TEST_DATABASE_URL=postgres://cx9@127.0.0.1:5432/cx9_test?sslmode=disable \
-  go test -race ./internal/store/                      # además contra Postgres
+  go test -race -p 1 ./internal/store/ ./internal/api/ # además contra Postgres (borra y recrea las tablas de esa base)
 go test -race -coverpkg=./... -coverprofile=results/cover.out ./... \
   && go tool cover -func=results/cover.out > results/coverage.txt
 ```
@@ -150,7 +150,7 @@ proveedores solo dice `configured: true/false`).
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Base URL |
 | `CX9_OLLAMA_URL` | `http://localhost:11434` | Ollama local (`OLLAMA_URL` como respaldo; en compose `http://host.docker.internal:11434`) |
 | `OLLAMA_MODEL` | `llama3.1` | Modelo de Ollama |
-| `CX9_TEST_DATABASE_URL` | vacío | Solo tests: corre los tests de `internal/store` también contra Postgres |
+| `CX9_TEST_DATABASE_URL` | vacío | Solo tests: corre los tests de `internal/store` y la regresión de muletillas de `internal/api` también contra Postgres (usar una base descartable y `-p 1`) |
 
 Duraciones en formato Go (`1.5s`, `2m`, `12h`).
 
