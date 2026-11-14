@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coach-speech"
+version = "1.0.0"
+description = "Servicio de voz local (STT con muletillas + TTS) del coach de entrevistas CORTEX-9."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Federico Nicolas Baez Rizzo" }]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "prometheus-client>=0.20",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+whisper = ["faster-whisper>=1.1,<2"]
+piper = ["piper-tts>=1.3,<2"]
+dev = ["pytest>=7", "httpx>=0.27", "ruff>=0.5"]
+
+[project.scripts]
+coach-speech = "coach_speech.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["coach_speech*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S108"]
