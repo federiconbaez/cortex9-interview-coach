@@ -18,6 +18,14 @@ import (
 // playTTS consume tts.audio + frames, verifica sha256 y manda tts.played.
 func (w *wsClient) playTTS(utt string) {
 	w.t.Helper()
+	w.receiveTTS(utt)
+	w.send("tts.played", map[string]any{"utterance_id": utt})
+}
+
+// receiveTTS consume tts.audio + frames y verifica sha256, sin mandar tts.played
+// (para el cierre: el servidor no lo espera y cierra después de session.end).
+func (w *wsClient) receiveTTS(utt string) {
+	w.t.Helper()
 	m := w.expect("tts.audio")
 	d := m.data(w.t)
 	if d["utterance_id"] != utt {
@@ -36,7 +44,6 @@ func (w *wsClient) playTTS(utt string) {
 	if hex.EncodeToString(sum[:]) != d["sha256"] || len(audio) != int(d["bytes"].(float64)) {
 		w.t.Fatal("sha256/bytes del TTS")
 	}
-	w.send("tts.played", map[string]any{"utterance_id": utt})
 }
 
 func checkSeqs(t *testing.T, w *wsClient) {
@@ -96,8 +103,13 @@ func TestLiveFullVoiceSession(t *testing.T) {
 		}
 		utt := d["utterance_id"].(string)
 		kind, _ := d["kind"].(string)
+		if kind == "closing" {
+			// el servidor no espera tts.played del cierre: manda session.end y cierra
+			w.receiveTTS(utt)
+			continue
+		}
 		w.playTTS(utt)
-		if kind == "intro" || kind == "closing" {
+		if kind == "intro" {
 			continue
 		}
 		if typ == "followup" {
