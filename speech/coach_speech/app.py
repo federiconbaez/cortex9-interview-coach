@@ -42,6 +42,8 @@ from .limits import BodySizeLimitMiddleware
 from .metrics import Metrics
 from .stt import STTBackend, STTRequest, make_stt
 from .tts import TTSError, make_tts
+from .vad import Endpoint
+from .vad import endpoint as vad_endpoint
 
 log = logging.getLogger("coach_speech")
 
@@ -142,6 +144,12 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
                     stt_backend.load()
                 except Exception as e:  # noqa: BLE001 - se informa en /health
                     log.error("no se pudo cargar el modelo STT: %s", type(e).__name__)
+                try:  # calienta Silero (la primera llamada carga el ONNX, ~150 ms)
+                    import numpy as np
+
+                    vad_endpoint(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), s, True)
+                except Exception as e:  # noqa: BLE001 - sin Silero se usa el VAD por energía
+                    log.warning("VAD Silero no disponible: %s", type(e).__name__)
 
             threading.Thread(target=_load, name="stt-preload", daemon=True).start()
         yield
@@ -339,6 +347,7 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
         word_confidence: bool = Query(True),
         prompt: str | None = Query(None, max_length=500),
         partial: bool = Query(False),
+        vad: bool | None = Query(None),
     ):
         check_auth(request)
         await mock_fail(request)
@@ -352,7 +361,15 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
             raise APIError(422, "NO_AUDIO", "el cuerpo está vacío")
         duration, _, kind = decode_audio(body, request.headers.get("content-type"))
         samples = None
-        if not mock or kind[0] == "ogg":
+        # Endpointing (contrato v1.2): con partial=true (o vad=true) se informan
+        # speech_ended_ms y trailing_silence_ms; vad=false lo apaga.
+        want_endpoint = partial if vad is None else vad
+        mock_forced = mock and (
+            request.headers.get("x-mock-trailing-silence") is not None
+            or request.headers.get("x-mock-speech-ended") is not None
+            or s.mock_trailing_silence_ms is not None
+        )
+        if not mock or kind[0] == "ogg" or (want_endpoint and not mock_forced):
             if getattr(stt_backend, "loading", False):
                 raise APIError(
                     503, "MODEL_LOADING", "cargando el modelo de transcripción", True, {"Retry-After": "5"}
@@ -371,6 +388,13 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
         if duration > s.max_audio_s:
             raise APIError(413, "PAYLOAD_TOO_LARGE", f"más de {s.max_audio_s:g} s de audio")
         metrics.upload_bytes.observe(len(body))
+        ep = None
+        if want_endpoint:
+            if mock_forced:
+                ep = mock_endpoint(request, duration)
+            else:
+                ep = await run_in_threadpool(vad_endpoint, samples, s, not mock)
+            metrics.vad_requests.labels(ep.engine).inc()
         mock_text = request.headers.get("x-mock-transcript") if mock else None
         if mock_text is not None:
             from urllib.parse import unquote
@@ -384,6 +408,7 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
             prompt=prompt or None,
             partial=partial,
             mock_transcript=mock_text,
+            no_speech=bool(ep and ep.engine == "silero" and ep.speech_ended_ms is None),
         )
         t0 = time.perf_counter()
         try:
@@ -424,7 +449,7 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
                 seg["words"] = []
         metrics.stt_audio_seconds.labels(tr.language).inc(duration)
         metrics.stt_fillers.labels(tr.language).inc(len(fillers))
-        return {
+        out = {
             "text": tr.text,
             "language": tr.language,
             "duration_s": duration,
@@ -438,6 +463,32 @@ def create_app(settings: Settings | None = None, stt: STTBackend | None = None, 
             "filler_count": len(fillers),
             "pauses": pauses,
         }
+        if ep is not None:
+            out.update(ep.fields())
+        return out
+
+    def mock_endpoint(request: Request, duration_s: float) -> Endpoint:
+        """Mock: X-Mock-Trailing-Silence / X-Mock-Speech-Ended (ms) o SPEECH_MOCK_TRAILING_SILENCE_MS.
+
+        Sin ninguno se usa la energía del PCM (vad.endpoint), también determinista.
+        """
+        dur = int(round(duration_s * 1000))
+        h_tr = request.headers.get("x-mock-trailing-silence")
+        h_end = request.headers.get("x-mock-speech-ended")
+        try:
+            tr = int(h_tr) if h_tr not in (None, "") else None
+            end = int(h_end) if h_end not in (None, "") else None
+        except ValueError:
+            raise APIError(
+                400, "BAD_REQUEST", "X-Mock-Trailing-Silence / X-Mock-Speech-Ended: ms enteros"
+            ) from None
+        if tr is None and end is None:
+            tr = s.mock_trailing_silence_ms or 0
+        if end is None:
+            end = max(0, dur - tr)
+        if tr is None:
+            tr = max(0, dur - end)
+        return Endpoint(end, tr, "mock-header")
 
     @app.post("/tts")
     async def synthesize(request: Request, req: TTSRequest):

@@ -51,4 +51,10 @@ class Metrics:
         self.rejected = Counter(
             "speech_rejected_total", "Solicitudes rechazadas", ["reason"], registry=self.registry
         )
+        self.vad_requests = Counter(
+            "speech_vad_endpoint_total",
+            "Cálculos de fin de voz por motor",
+            ["engine"],
+            registry=self.registry,
+        )
         self.in_flight = Gauge("speech_in_flight", "Operaciones STT/TTS en curso", registry=self.registry)

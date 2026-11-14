@@ -71,7 +71,8 @@ def test_decode_options_keep_fillers():
     stt = FasterWhisperSTT(Settings())
     o = stt.decode_options("es", None)
     assert o["suppress_tokens"] == [] and o["suppress_blank"] is False
-    assert o["word_timestamps"] is True and o["vad_filter"] is False
+    assert o["word_timestamps"] is True and o["vad_filter"] is True
+    assert o["vad_parameters"]["min_silence_duration_ms"] >= 500 and o["vad_parameters"]["speech_pad_ms"] > 0
     assert o["condition_on_previous_text"] is False and o["beam_size"] == 5
     for f in ("eh", "este", "o sea", "um"):
         assert f in o["initial_prompt"].lower()

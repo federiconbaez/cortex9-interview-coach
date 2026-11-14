@@ -1,8 +1,10 @@
 """Backends de transcripción detrás de una interfaz común (contrato §6.1).
 
-FasterWhisperSTT conserva las muletillas: desactiva la supresión de tokens,
-no usa VAD (que recorta vacilaciones) y pasa un initial_prompt con muletillas
-para que Whisper no "limpie" la transcripción. Basado en interview_sim.stt.
+FasterWhisperSTT conserva las muletillas: desactiva la supresión de tokens y
+pasa un initial_prompt con muletillas para que Whisper no "limpie" la
+transcripción. Usa el VAD Silero de faster-whisper con silencio mínimo largo y
+relleno generoso, para descartar silencio (evita alucinaciones en ventanas
+parciales) sin recortar vacilaciones. Basado en interview_sim.stt.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from typing import Protocol
 import numpy as np
 
 from .config import Settings
+from .vad import whisper_vad_parameters
 
 
 @dataclass
@@ -46,6 +49,7 @@ class STTRequest:
     prompt: str | None = None
     partial: bool = False
     mock_transcript: str | None = None
+    no_speech: bool = False  # el VAD no encontró voz: no hace falta decodificar
 
 
 @dataclass
@@ -125,11 +129,14 @@ class FasterWhisperSTT:
             # tiende a borrar "um", "eh", "este"...
             "suppress_tokens": [],
             "suppress_blank": False,
-            "vad_filter": False,
+            "vad_filter": self.s.vad_filter,
+            "vad_parameters": whisper_vad_parameters(self.s, partial) if self.s.vad_filter else None,
             "condition_on_previous_text": False,
         }
 
     def transcribe(self, req: STTRequest) -> Transcript:
+        if req.no_speech and self.s.vad_filter:
+            return Transcript("", req.language or "es", [], self.name, self.model)
         model = self.load()
         opts = self.decode_options(req.language, req.prompt, req.partial)
         tmp = None

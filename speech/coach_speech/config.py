@@ -83,6 +83,16 @@ class Settings:
     max_concurrency: int = 1
     queue_timeout_s: float = 10.0
     preload: bool = True
+    # VAD (Silero, incluido en faster-whisper) para decodificar y para el endpointing
+    vad_filter: bool = True  # SPEECH_VAD_FILTER: vad_filter de faster-whisper en parciales y finales
+    vad_threshold: float = 0.5
+    vad_min_speech_ms: int = 100
+    vad_min_silence_ms: int = 1000  # finales: no partir por pausas de vacilación
+    vad_partial_min_silence_ms: int = 500
+    vad_speech_pad_ms: int = 300
+    endpoint_min_silence_ms: int = 200  # granularidad de speech_ended_ms / trailing_silence_ms
+    vad_energy_dbfs: float = -45.0  # VAD por energía (mock y respaldo)
+    mock_trailing_silence_ms: int | None = None  # SPEECH_MOCK_TRAILING_SILENCE_MS: fija el valor en mock
     mock_text: str = ""  # SPEECH_MOCK_TEXT: texto fijo del mock si no viene X-Mock-Transcript (extensión, apagada por defecto)
 
     @classmethod
@@ -132,5 +142,18 @@ class Settings:
             max_concurrency=max(1, _int("SPEECH_MAX_CONCURRENCY", 1)),
             queue_timeout_s=_float("SPEECH_QUEUE_TIMEOUT_S", 10.0),
             preload=_bool("SPEECH_PRELOAD", True),
+            vad_filter=_bool("SPEECH_VAD_FILTER", True),
+            vad_threshold=_float("SPEECH_VAD_THRESHOLD", 0.5),
+            vad_min_speech_ms=_int("SPEECH_VAD_MIN_SPEECH_MS", 100),
+            vad_min_silence_ms=_int("SPEECH_VAD_MIN_SILENCE_MS", 1000),
+            vad_partial_min_silence_ms=_int("SPEECH_VAD_PARTIAL_MIN_SILENCE_MS", 500),
+            vad_speech_pad_ms=_int("SPEECH_VAD_SPEECH_PAD_MS", 300),
+            endpoint_min_silence_ms=_int("SPEECH_ENDPOINT_MIN_SILENCE_MS", 200),
+            vad_energy_dbfs=_float("SPEECH_VAD_ENERGY_DBFS", -45.0),
+            mock_trailing_silence_ms=(
+                _int("SPEECH_MOCK_TRAILING_SILENCE_MS", 0)
+                if os.environ.get("SPEECH_MOCK_TRAILING_SILENCE_MS")
+                else None
+            ),
             mock_text=os.environ.get("SPEECH_MOCK_TEXT", ""),
         )

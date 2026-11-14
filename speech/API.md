@@ -30,7 +30,7 @@ Si hay diferencia, manda el contrato.
 - `audio/wav` (también `audio/x-wav`, `audio/wave`): PCM16, cualquier rate; estéreo se mezcla a mono.
 - `audio/ogg; codecs=opus`: solo en modo real y si PyAV está instalado (viene con faster-whisper). Se declara en `/health` → `stt.input_formats`.
 
-Query: `language` (`es`|`en`|`auto`, obligatorio), `word_confidence` (por defecto `true`), `prompt` (≤ 500), `partial` (`true` → beam rápido, `SPEECH_WHISPER_PARTIAL_BEAM_SIZE`, por defecto 1).
+Query: `language` (`es`|`en`|`auto`, obligatorio), `word_confidence` (por defecto `true`), `prompt` (≤ 500), `partial` (`true` → beam rápido, `SPEECH_WHISPER_PARTIAL_BEAM_SIZE`, por defecto 1), `vad` (opcional: fuerza o apaga los campos de fin de voz; por defecto van solo con `partial=true`).
 
 Respuesta `200` (campos del contrato + extensiones marcadas):
 
@@ -54,6 +54,11 @@ Respuesta `200` (campos del contrato + extensiones marcadas):
 ```
 
 - Extensiones (los clientes ignoran campos desconocidos, contrato §2.1): `words[].is_filler`, `fillers`, `filler_count`, `pauses` (huecos ≥ `SPEECH_PAUSE_THRESHOLD_S`, 0,6 s por defecto).
+- Fin de voz (contrato v1.2, para el endpointing del backend), en el nivel superior y solo con `partial=true` o `vad=true`:
+  - `speech_ended_ms`: fin de la última voz detectada, en ms desde el inicio de la ventana enviada; `null` si no hubo voz.
+  - `trailing_silence_ms`: silencio desde ese punto hasta el final de la ventana (toda la ventana si no hubo voz).
+  - Motor: Silero VAD (incluido en faster-whisper, ONNX, ~8 ms por ventana de 6 s en CPU, se calienta al arrancar) sin relleno y con silencio mínimo `SPEECH_ENDPOINT_MIN_SILENCE_MS` (200 ms). Sin faster-whisper o en modo mock: energía RMS por tramos de 30 ms (umbral `SPEECH_VAD_ENERGY_DBFS`, −45 dBFS), determinista.
+  - Si Silero no encuentra voz en una ventana parcial, no se decodifica: `text: ""` al instante (evita alucinaciones de Whisper sobre silencio).
 - `duration_s` es la duración del audio recibido (L16: `bytes / (2 × rate)`; WAV: header), no la del habla.
 - `confidence`: promedio ponderado por duración de la confianza de las palabras (`probability` de Whisper); `null` sin palabras. Si un segmento no tiene palabras, su `confidence` es `exp(avg_logprob)`.
 - Con `word_confidence=false` las palabras se usan igual para `confidence`, `fillers` y `pauses`, pero `segments[].words` va vacío.
@@ -64,7 +69,8 @@ Whisper tiende a "limpiar" la transcripción. En `FasterWhisperSTT`:
 
 - `suppress_tokens=[]` y `suppress_blank=False` (sin supresión de tokens).
 - `initial_prompt` con muletillas (por idioma, configurable con `SPEECH_FILLER_PROMPT_ES/EN`; si el backend manda `prompt`, se usa ese).
-- `vad_filter=False` (el VAD recorta vacilaciones) y `condition_on_previous_text=False`.
+- `vad_filter=True` (Silero) con parámetros que no recortan vacilaciones: `speech_pad_ms` 300 y `min_silence_duration_ms` 1000 en finales / 500 en parciales (`SPEECH_VAD_*`). Descarta el silencio y evita alucinaciones en ventanas parciales; las marcas de tiempo vuelven a la línea de tiempo original, así que `pauses` sigue midiendo los huecos reales. `SPEECH_VAD_FILTER=false` vuelve al comportamiento anterior.
+- `condition_on_previous_text=False`.
 - `word_timestamps=True` con `probability` por palabra → `confidence`.
 
 Detección (`fillers.py`): vacilaciones (`um`, `uh`, `eh`, `em`, `mm`, `er`…) siempre; `este`, `bueno`, `tipo`, `like`, `well`, `so` solo si van seguidas de coma/puntos suspensivos o de una pausa; frases `o sea`, `como que`, `en plan`, `you know`, `I mean`, `kind of`, `sort of`.
@@ -104,6 +110,7 @@ Según contrato §6.7: sin modelos ni red, salida idéntica byte a byte para la 
 
 - `/stt`: `X-Mock-Transcript` (URL-encoded) o `respuesta simulada <sha256[:8]>` / `simulated answer …`; un segmento; palabras uniformes con `0.9`, las que empiezan con `?` van con `0.3` y sin el `?` (también en `text`); `confidence` = promedio simple; `processing_ms: 0`.
 - Extensión opcional (apagada por defecto): `SPEECH_MOCK_TEXT` fija el texto simulado cuando no llega `X-Mock-Transcript`, con las mismas reglas (`?` → confianza `0.3`). Sirve para probar el flujo completo detrás del backend, que no reenvía headers `X-Mock-*`; sin la variable el comportamiento es el del contrato.
+- Fin de voz en mock: `X-Mock-Trailing-Silence` y/o `X-Mock-Speech-Ended` (ms) lo fijan; si no vienen, `SPEECH_MOCK_TRAILING_SILENCE_MS` (el backend no reenvía headers `X-Mock-*`); si tampoco, se calcula por energía del PCM, así que mandar silencio al final de la respuesta produce `trailing_silence_ms` creciente de forma determinista.
 - `X-Mock-Fail: 503|504|timeout` en `/stt` (y, como extensión, en `/tts`).
 - `/tts`: silencio PCM16 a 16 kHz, `300 + 60 × palabras` ms (ignora `sample_rate`).
 - `/voices`: `mock-es`, `mock-en`. `/health`: `"mode": "mock"`.
@@ -117,6 +124,12 @@ Según contrato §6.7: sin modelos ni red, salida idéntica byte a byte para la 
 | `CX9_SPEECH_TOKEN` | – | Bearer opcional |
 | `SPEECH_HOST` / `SPEECH_PORT` | `127.0.0.1` / `8090` | |
 | `SPEECH_MOCK_TEXT` | – | solo modo mock: texto por defecto de `/stt` |
+| `SPEECH_MOCK_TRAILING_SILENCE_MS` | – | solo modo mock: `trailing_silence_ms` fijo |
+| `SPEECH_VAD_FILTER` | `true` | VAD Silero al decodificar |
+| `SPEECH_VAD_THRESHOLD` / `_MIN_SPEECH_MS` / `_SPEECH_PAD_MS` | `0.5` / `100` / `300` | |
+| `SPEECH_VAD_MIN_SILENCE_MS` / `SPEECH_VAD_PARTIAL_MIN_SILENCE_MS` | `1000` / `500` | finales / parciales |
+| `SPEECH_ENDPOINT_MIN_SILENCE_MS` | `200` | granularidad de `speech_ended_ms` |
+| `SPEECH_VAD_ENERGY_DBFS` | `-45` | VAD por energía (mock y respaldo) |
 | `SPEECH_STT_BACKEND` | `faster-whisper` | `faster-whisper` \| `mock` |
 | `SPEECH_WHISPER_MODEL` | `small` | nombre o ruta local a un modelo CTranslate2 |
 | `SPEECH_WHISPER_DOWNLOAD_ROOT` | `models/whisper` | |
