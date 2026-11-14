@@ -41,6 +41,6 @@ O por separado: `deploy/local/run-speech.sh`, `run-backend.sh`, `run-frontend.sh
 
 ## Variables que el compose le pasa al backend
 
-`CX9_ENV`, `CX9_HTTP_ADDR`, `CX9_DATABASE_URL`, `CX9_SPEECH_URL`, `CX9_SPEECH_TOKEN`, `CX9_PASSWORD_HASH`, `CX9_CORS_ORIGINS`, `CX9_LOG_TRANSCRIPTS`, `CX9_LLM_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `OLLAMA_URL`. `CX9_HTTP_ADDR`, `CX9_DATABASE_URL` y `CX9_LLM_PROVIDER` son propuesta de `/deploy`: confirmar con el backend.
+`CX9_ENV`, `CX9_HTTP_ADDR`, `CX9_DATABASE_URL`, `CX9_SPEECH_URL`, `CX9_SPEECH_TOKEN`, `CX9_PASSWORD_HASH`, `CX9_CORS_ORIGINS`, `CX9_LOG_TRANSCRIPTS`, `CX9_LLM_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CX9_OLLAMA_URL`. Confirmadas por el backend: `CX9_HTTP_ADDR` (default `:8080`), `CX9_DATABASE_URL` (sqlite o postgres según el esquema) y `CX9_LLM_PROVIDER` (`openai`, `anthropic`, `xai`, `ollama` o `mock`; default `mock`). El binario es `backend/cmd/coach`.
 
 Ver también [`SECURITY.md`](SECURITY.md).
