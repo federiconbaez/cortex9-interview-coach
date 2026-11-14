@@ -48,6 +48,7 @@ export const en: Record<MessageKey, string> = {
   'answer.ptt': 'Hold to talk',
   'answer.pttHint': 'Hold the space bar or the button while you answer.',
   'answer.vadHint': 'Speak whenever you are ready. The answer stops after a silence.',
+  'answer.endpointHint': 'The interviewer also treats your answer as finished after {seconds} s of silence.',
   'answer.typedSend': 'Send text',
   'answer.listening': 'Microphone on: waiting for you to speak.',
   'answer.recording': 'Recording your answer…',

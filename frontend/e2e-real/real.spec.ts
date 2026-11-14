@@ -79,6 +79,7 @@ test('real · voz: TTS wav, repetir (repeat=true), NO_AUDIO → misma pregunta, 
 
   const toggle = page.getByTestId('answer-toggle');
   await toggle.click();
+  await expect(toggle).toHaveText('Terminar respuesta'); // el micrófono ya abrió
   await toggle.click();
   await expect(page.getByTestId('session-error')).toContainText('No se escuchó tu respuesta', { timeout: 15_000 });
   await expect(page.getByTestId('tts-toggle')).toHaveText('Escuchar de nuevo', { timeout: 15_000 });
@@ -91,7 +92,7 @@ test('real · voz: TTS wav, repetir (repeat=true), NO_AUDIO → misma pregunta, 
   await openReport(page);
   await noA11yViolations(page);
 
-  const msgs = sent.map((s) => JSON.parse(s) as { type: string; seq: number });
+  const msgs = sent.map((s) => JSON.parse(s) as { type: string; seq: number; data?: unknown });
   const hello = msgs.filter((m) => m.type === 'hello');
   expect(hello.map((m) => m.seq)).toEqual([0]);
   const rest = msgs.filter((m) => m.type !== 'hello').map((m) => m.seq);
@@ -106,6 +107,18 @@ test('real · voz: TTS wav, repetir (repeat=true), NO_AUDIO → misma pregunta, 
   expect(prompts[0]).toMatchObject({ turn_id: 't-0', index: 0, kind: 'intro' });
   expect(prompts.at(-1)).toMatchObject({ turn_id: 't-0', index: 1, kind: 'closing' });
   expect(prompts.filter((p) => p.repeat === true).length).toBe(2); // control.repeat + NO_AUDIO
+  // v1.2: hello.endpointing true (modo automático), session.ready.endpointing efectivo y
+  // turn.end por audio_end o por endpoint (el tono del micrófono falso puede tener silencios).
+  expect(msgs.find((m) => m.type === 'hello')).toMatchObject({ data: { endpointing: true } });
+  const ready = got.find((m) => m.type === 'session.ready');
+  expect(ready?.data.endpointing).toMatchObject({ enabled: true });
+  const reasons = got.filter((m) => m.type === 'turn.end').map((m) => m.data.reason);
+  expect(reasons.every((r) => ['audio_end', 'endpoint', 'no_audio'].includes(String(r)))).toBe(true);
+  // §5.14: tts.played solo de intro/preguntas, nunca del cierre.
+  const closingUtt = prompts.at(-1)?.utterance_id;
+  const played = msgs.filter((m) => m.type === 'tts.played') as unknown as { data: { utterance_id: string } }[];
+  expect(played.some((m) => m.data.utterance_id === closingUtt)).toBe(false);
+  console.log(`[real] endpointing=${JSON.stringify(ready?.data.endpointing)} turn.end=${reasons.join(',')} tts.played=${played.length}`);
   const ttsFormats = got.filter((m) => m.type === 'tts.audio').map((m) => m.data.format);
   expect(new Set(ttsFormats)).toEqual(new Set(['wav']));
 });

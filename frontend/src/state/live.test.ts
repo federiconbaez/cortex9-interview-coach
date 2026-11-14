@@ -23,6 +23,15 @@ describe('liveReducer', () => {
     expect(liveReducer(s, { type: 'ttsPlayed' }).server).toBe('listening');
     expect(canAnswer(liveReducer(s, { type: 'recording', on: true }))).toBe(false);
   });
+  it('§5.15 v1.2: guarda el endpointing efectivo de session.ready; turn.end por endpoint pasa a processing', () => {
+    const ep = { enabled: true, mode: 'auto', silence_ms: 700 };
+    let s = run(open, m('session.ready', { state: 'ready', tts_delivery: 'binary', endpointing: ep }), q());
+    expect(s.endpointing).toEqual(ep);
+    s = liveReducer(liveReducer(s, { type: 'ttsPlayed' }), { type: 'recording', on: true });
+    s = [m('transcript.final', { turn_id: 't-1', text: 'hice 3 cosas', low_confidence: [], duration_ms: 900 }), m('turn.end', { turn_id: 't-1', reason: 'endpoint', next: 'question', followups_used: 0, max_followups: 1 })].reduce(liveReducer, s);
+    expect([s.server, s.recording, s.transcript.at(-1)?.text]).toEqual(['processing', false, 'hice 3 cosas']);
+    expect(run(open, m('session.ready', { state: 'ready', tts_delivery: 'binary' })).endpointing).toBeNull();
+  });
   it('intro y cierre no se responden; sin conexión tampoco', () => {
     expect(canAnswer(run(open, q({ kind: 'intro' })))).toBe(false);
     expect(canAnswer(run(open, q({ kind: 'closing' })))).toBe(false);

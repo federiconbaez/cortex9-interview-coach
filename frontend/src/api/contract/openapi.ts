@@ -849,6 +849,11 @@ export interface components {
                 tts_formats?: ("pcm16le" | "wav")[];
                 /** @default true */
                 partials: boolean;
+                /**
+                 * @description v1.2: endpointing por silencio para esta conexión; false = el turno se cierra solo con audio.end (contrato §5.15).
+                 * @default true
+                 */
+                endpointing: boolean;
                 resume?: {
                     last_server_seq: number;
                 } | null;
@@ -875,7 +880,15 @@ export interface components {
                 last_client_seq: number;
                 question_index?: number;
                 question_count?: number;
+                endpointing?: components["schemas"]["WsEndpointInfo"];
             };
+        };
+        /** @description v1.2: endpointing efectivo de la conexión (contrato §5.15). Solo se analiza el audio del micrófono del usuario en su turno. */
+        WsEndpointInfo: {
+            enabled: boolean;
+            /** @enum {string} */
+            mode: "off" | "stt" | "energy" | "auto";
+            silence_ms: number;
         };
         /** @enum {string} */
         WsSessionState: "ready" | "intro" | "asking" | "listening" | "processing" | "paused" | "closing" | "ended";
@@ -995,7 +1008,7 @@ export interface components {
             data?: {
                 turn_id: string;
                 /** @enum {string} */
-                reason: "audio_end" | "text" | "skip" | "max_duration" | "no_audio" | "repeat";
+                reason: "audio_end" | "endpoint" | "text" | "skip" | "max_duration" | "no_audio" | "repeat";
                 /** @enum {string} */
                 next: "followup" | "question" | "repeat" | "end";
                 followups_used: number;
@@ -1084,6 +1097,7 @@ export interface components {
                 turn_id?: string;
             };
         };
+        /** @description cliente→servidor, una vez por utterance_id (duplicados y viejos se ignoran). Solo con tts_delivery binary|url. El servidor lo espera para intro/question/followup (no para el cierre); si no llega en duration_ms + CX9_TTS_PLAYED_GRACE_MS (o CX9_TTS_PLAYED_TIMEOUT_MS sin duración) avanza igual, sin error (contrato §5.14). */
         WsTtsPlayed: components["schemas"]["WsEnvelope"] & {
             /** @constant */
             type?: "tts.played";

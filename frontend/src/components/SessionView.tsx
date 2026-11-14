@@ -42,7 +42,7 @@ function connFailureKey(s: LiveState): MessageKey {
 }
 
 export function SessionView({ url, sessionId, input, capture, deps, onReport }: Props) {
-  const { t } = useI18n();
+  const { t, formatNumber } = useI18n();
   const api = useApi();
   const s = useLiveSession({ url, sessionId, input, capture, deps });
   const { state, tts } = s;
@@ -206,6 +206,11 @@ export function SessionView({ url, sessionId, input, capture, deps, onReport }: 
         {input === 'voice' ? (
           <>
             <p className="muted">{capture === 'ptt' ? t('answer.pttHint') : t('answer.vadHint')}</p>
+            {capture !== 'ptt' && state.endpointing?.enabled === true && (
+              <p className="muted small" data-testid="endpoint-hint">
+                {t('answer.endpointHint', { seconds: formatNumber(state.endpointing.silence_ms / 1000) })}
+              </p>
+            )}
             {tts === 'playing' && <p className="muted">{t('practice.ttsPlayingNote')}</p>}
             <div className="row">
               {capture === 'ptt' ? (

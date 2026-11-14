@@ -46,6 +46,7 @@ export const es = {
   'answer.ptt': 'Mantener para hablar',
   'answer.pttHint': 'Mantené presionada la barra espaciadora o el botón mientras respondés.',
   'answer.vadHint': 'Hablá cuando quieras. La respuesta se corta sola tras un silencio.',
+  'answer.endpointHint': 'La entrevistadora también da por terminada tu respuesta tras {seconds} s de silencio.',
   'answer.typedSend': 'Enviar texto',
   'answer.listening': 'Micrófono activo: esperando que hables.',
   'answer.recording': 'Grabando tu respuesta…',

@@ -1,5 +1,5 @@
 /** Estado de la sesión en vivo derivado de los mensajes del contrato (§5.5, §5.6). */
-import type { Probe, ServerMessage, SessionEnd, SessionState as WsState, WsErrorCode } from '../api/contract/ws-types';
+import type { EndpointInfo, Probe, ServerMessage, SessionEnd, SessionState as WsState, WsErrorCode } from '../api/contract/ws-types';
 import type { ConnectionState } from '../api/ws';
 
 export type TurnKind = 'intro' | 'main' | 'closing' | 'repeat' | 'followup';
@@ -40,6 +40,8 @@ export interface LiveState {
   tts: 'pending' | 'available' | 'unavailable';
   /** Entrega de TTS que eligió el servidor en session.ready (con `none` no se manda tts.played). */
   ttsDelivery: 'binary' | 'url' | 'none' | null;
+  /** §5.15 (v1.2): endpointing efectivo que informa session.ready (null si no lo informa). */
+  endpointing: EndpointInfo | null;
   transcript: TranscriptEntry[];
   partial: { turnId: string; text: string; revision: number } | null;
   error: { code: WsErrorCode; message: string; fatal: boolean } | null;
@@ -68,6 +70,7 @@ export const initialLive: LiveState = {
   total: null,
   tts: 'pending',
   ttsDelivery: null,
+  endpointing: null,
   transcript: [],
   partial: null,
   error: null,
@@ -143,6 +146,7 @@ function onServer(s: LiveState, m: ServerMessage): LiveState {
         lastIndex: m.data.question_index ?? s.lastIndex,
         tts: m.data.tts_delivery === 'none' ? 'unavailable' : s.tts,
         ttsDelivery: m.data.tts_delivery,
+        endpointing: m.data.endpointing ?? null,
       };
     case 'question': {
       const d = m.data;

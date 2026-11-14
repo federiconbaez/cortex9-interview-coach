@@ -98,6 +98,8 @@ test('push-to-talk con la barra espaciadora', async ({ page, request }) => {
   await expect(page.getByRole('heading', { name: 'Práctica terminada' })).toBeVisible();
   const st = await mockState(request);
   expect(st.sessions[0]?.turns[0]?.duration_ms ?? 0).toBeGreaterThan(800);
+  // §5.15 v1.2: con push-to-talk el cliente apaga el endpointing por silencio.
+  expect(st.sessions[0]?.helloEndpointing).toEqual([false]);
 });
 
 test('reconexión con resume tras un corte 4008, y pausa/reanudar', async ({ page, request }) => {
@@ -168,4 +170,23 @@ test('repetir (mismo turno, repeat=true) y NO_AUDIO (turno nuevo, repeat=true)',
   await expect(page.getByRole('heading', { name: 'Práctica terminada' })).toBeVisible();
   const st = (await mockState(request)).sessions[0];
   expect(st?.turns.map((t) => t.turn_id)).toEqual(['t-2']);
+});
+
+test('§5.15 endpointing: el servidor cierra el turno por silencio, sin audio.end; tts.played sin el cierre (§5.14)', async ({ page, request }) => {
+  await startSession(page, { input: 'voice', count: 1, followups: 0 });
+  await expect(page.getByTestId('tts-toggle')).toHaveText('Escuchar de nuevo');
+  await expect(page.getByTestId('endpoint-hint')).toContainText('0,7 s de silencio');
+  await page.getByTestId('answer-toggle').click();
+  await expect(page.getByTestId('answer-toggle')).toHaveText('Terminar respuesta');
+  await page.waitForTimeout(800);
+  expect((await request.post(`${MOCK}/__mock/endpoint`)).ok()).toBe(true);
+  await expect(page.getByRole('heading', { name: 'Práctica terminada' })).toBeVisible();
+  await expect(page.getByTestId('transcript')).toContainText(/respuesta simulada [0-9a-f]{8}/);
+  await page.waitForTimeout(500);
+  const st = (await mockState(request)).sessions[0];
+  expect(st?.helloEndpointing).toEqual([true]);
+  expect(st?.lateAudioEnd).toBe(0);
+  expect(st?.seqErrors).toBe(0);
+  // intro (u-1) y pregunta (u-2); el cierre (u-3) no
+  expect(st?.playedSeen).toEqual(['u-1', 'u-2']);
 });

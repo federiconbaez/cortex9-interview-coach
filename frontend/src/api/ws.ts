@@ -98,6 +98,8 @@ export interface LiveOptions {
   onState: (s: ConnectionState, info: StateInfo) => void;
   /** Mensajes o frames que no cumplen el contrato (se ignoran; útil para depurar). */
   onInvalid?: (reason: string) => void;
+  /** §5.15 (v1.2): `hello.endpointing`. Sin definir no se manda (default del servidor: true). */
+  endpointing?: boolean;
 }
 
 type OutItem = { seq: number; data: string | ArrayBuffer; audioBytes: number };
@@ -194,6 +196,7 @@ export class LiveConnection {
         tts_delivery: ['binary', 'url'],
         tts_formats: ['wav', 'pcm16le'],
         partials: true,
+        ...(this.opts.endpointing === undefined ? {} : { endpointing: this.opts.endpointing }),
         resume: this.everReady ? { last_server_seq: this.lastServerSeq } : null,
       };
       ws.send(this.envelope('hello', 0, data));

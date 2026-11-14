@@ -56,12 +56,23 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
 
   useEffect(() => {
     const d = depsRef.current;
-    const p = new TtsPlayer(d.createAudio(), setTts, markPlayed);
+    // §5.14 (v1.2): si el audio de la intervención no se puede reproducir (armado, sha256 o
+    // error del elemento), se avisa tts.played igual: el usuario no lo va a oír y así el
+    // servidor no espera hasta su timeout (duración + 3 s, o 20 s si no conoce la duración).
+    const onTts = (st: TtsState) => {
+      setTts(st);
+      if (st === 'error') markPlayed();
+    };
+    const p = new TtsPlayer(d.createAudio(), onTts, markPlayed);
     player.current = p;
     const asm = new TtsAssembler();
     const c = d.createConnection({
       url,
       sessionId,
+      // §5.15 (v1.2): con push-to-talk el turno lo cierra el usuario al soltar, así que se apaga el
+      // endpointing por silencio; con el modo automático/botón queda el default del servidor.
+      // En sesiones por escrito no aplica y no se manda.
+      ...(input === 'voice' ? { endpointing: capture !== 'ptt' } : {}),
       onState: (st, info) => {
         const a: Parameters<typeof dispatch>[0] = { type: 'conn', state: st, attempt: info.attempt };
         if (info.nextDelayMs !== undefined) a.nextDelayMs = info.nextDelayMs;
@@ -85,6 +96,13 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
           }
         } else if (msg.type === 'tts.url') {
           if (msg.data.utterance_id === utteranceRef.current) void p.loadUrl(d.resolveUrl(msg.data.url));
+        } else if (msg.type === 'turn.end') {
+          // §5.15: el servidor puede cerrar el turno solo (reason "endpoint", o max_duration) sin
+          // audio.end. Se deja de capturar y de mandar audio de ese turno; no se manda audio.end.
+          if (turnRef.current?.turnId === msg.data.turn_id) {
+            turnRef.current = null;
+            mic.current?.cancel();
+          }
         } else if (msg.type === 'pause' || msg.type === 'session.end') {
           if (turnRef.current) {
             turnRef.current = null;
@@ -134,7 +152,7 @@ export function useLiveSession({ url, sessionId, input, capture, deps }: LiveArg
       void m.close();
       p.release();
     };
-  }, [url, sessionId, markPlayed]);
+  }, [url, sessionId, markPlayed, input, capture]);
 
   // Sin audio TTS para la intervención actual: la pregunta solo se lee (el servidor pasa solo a listening).
   const answerable = canAnswer(state);

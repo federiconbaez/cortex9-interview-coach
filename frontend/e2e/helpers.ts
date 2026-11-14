@@ -20,6 +20,7 @@ export async function mockState(request: APIRequestContext) {
     sessions: {
       id: string; status: string; lastClientSeq: number; engineState: string | null;
       acks: number; seqErrors: number; unexpectedPlayed: number; helloSeqs: number[];
+      helloEndpointing: (boolean | null)[]; lateChunks: number; lateAudioEnd: number; playedSeen: string[];
       turns: { kind: string; turn_id: string; answer: string; source: string; duration_ms: number }[];
     }[];
   };

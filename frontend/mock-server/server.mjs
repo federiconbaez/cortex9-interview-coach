@@ -106,6 +106,7 @@ function createSession(body) {
     llm_provider: body.llm_provider ?? 'mock', max_followups: Math.min(2, body.max_followups ?? 2, scenario?.max_followups ?? 2),
     questions, created_at: body.__created_at ?? now(), started_at: null, ended_at: null, ended_reason: null,
     turns: [], report: null, ws: null, out: [], outSeq: 0, lastClientSeq: 0, engine: null,
+    endpointing: true, helloEndpointing: [], lateChunks: 0, lateAudioEnd: 0, playedSeen: [],
     config: { ...state.config }, ackSent: 0, ackBytes: 0, acks: 0, seqErrors: 0, unexpectedPlayed: 0, helloSeqs: [],
   };
   state.sessions.set(s.id, s);
@@ -294,7 +295,7 @@ function prompt(s, repeat) {
   sendTts(s);
 }
 
-function finishTurn(s, text, source, durationMs) {
+function finishTurn(s, text, source, durationMs, reason = source === 'text' ? 'text' : 'audio_end') {
   const e = s.engine;
   const cur = e.current;
   s.turns.push({ ...cur, answer: text, source, duration_ms: durationMs, low_confidence: [] });
@@ -306,10 +307,10 @@ function finishTurn(s, text, source, durationMs) {
   if (wantsFollowup) {
     e.followupIndex = used + 1;
     e.followupText = s.lang === 'en' ? 'Can you give me a concrete number?' : '¿Me podés dar un número concreto?';
-    send(s, 'turn.end', { turn_id: cur.turn_id, reason: source === 'text' ? 'text' : 'audio_end', next: 'followup', followups_used: used, max_followups: s.max_followups });
+    send(s, 'turn.end', { turn_id: cur.turn_id, reason, next: 'followup', followups_used: used, max_followups: s.max_followups });
     return startTurn(s);
   }
-  nextQuestion(s, cur.turn_id, source === 'text' ? 'text' : 'audio_end', used);
+  nextQuestion(s, cur.turn_id, reason, used);
 }
 
 function nextQuestion(s, turnId, reason, used) {
@@ -348,12 +349,17 @@ function onClientJson(s, m) {
   const e = s.engine;
   switch (m.type) {
     case 'tts.played':
+      s.playedSeen.push(m.data.utterance_id);
       if (s.config.tts === 'none') s.unexpectedPlayed += 1; // con tts_delivery=none el cliente no debe mandarlo
       if (m.data.utterance_id !== e.utteranceId) return;
       if (e.state === 'intro') return startTurn(s);
       if (e.state === 'asking') e.state = 'listening';
       return;
     case 'audio.end': {
+      if (e.endpointed?.has(m.data.turn_id)) {
+        s.lateAudioEnd += 1;
+        return wsError(s, 'STATE_CONFLICT', 'el turno ya se cerró por silencio');
+      }
       if (e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'audio.end fuera de listening');
       if (e.bytes < 3200) {
         // §5.5 v1.1: NO_AUDIO → turn.end next=repeat y la misma pregunta con turn_id nuevo y repeat=true.
@@ -402,6 +408,11 @@ function onClientJson(s, m) {
 function onClientBinary(s, buf) {
   const e = s.engine;
   if (buf[3] !== 0x01 || buf[16] !== 0x01) return wsError(s, 'INVALID_MESSAGE', 'kind/codec inesperado');
+  // §5.15: los chunks que llegan tarde para un turno cerrado por endpoint se descartan sin error.
+  if (e.endpointed?.has(`t-${buf.readUInt32BE(8)}`)) {
+    s.lateChunks += 1;
+    return;
+  }
   if (e.state !== 'listening') return wsError(s, 'STATE_CONFLICT', 'audio fuera de listening');
   if (`t-${buf.readUInt32BE(8)}` !== e.current?.turn_id) return wsError(s, 'INVALID_MESSAGE', 'turn_no no coincide');
   const len = buf.length - HEADER_LEN;
@@ -468,6 +479,9 @@ function attach(s, ws) {
         wsError(s, 'UNSUPPORTED_FORMAT', 'falta pcm16le', true, false, 4400);
         return ws.close(4400, 'format');
       }
+      // §5.15 (v1.2): hello.endpointing (default true) apaga o deja el cierre por silencio.
+      s.endpointing = m.data?.endpointing !== false;
+      s.helloEndpointing.push(m.data?.endpointing ?? null);
       const resumeFrom = m.data?.resume?.last_server_seq;
       const resumed = typeof resumeFrom === 'number' && s.engine !== null;
       // Un hello sin resume es un cliente nuevo: su secuencia vuelve a empezar en 1.
@@ -477,11 +491,12 @@ function attach(s, ws) {
       send(s, 'session.ready', {
         state: s.engine?.state === 'intro' ? 'intro' : (s.engine?.state ?? 'ready'), audio_format: { codec: 'pcm16le', sample_rate: 16000, channels: 1, frame_ms: 100 },
         tts_delivery: s.config.tts, ...(s.config.tts === 'none' ? {} : { tts_format: 'wav' }), heartbeat_ms: 15000, idle_timeout_ms: 45000, max_inflight_bytes: 96000,
-        max_turn_ms: 300000, resumed, last_client_seq: s.lastClientSeq, question_index: s.engine ? s.engine.qi + 1 : 0, question_count: s.questions.length,
+        max_turn_ms: 300000, resumed, last_client_seq: s.lastClientSeq,
+        endpointing: { enabled: s.endpointing, mode: s.endpointing ? 'energy' : 'off', silence_ms: 700 }, question_index: s.engine ? s.engine.qi + 1 : 0, question_count: s.questions.length,
       });
       for (const o of pending) ws.send(o.data);
       if (!s.engine) {
-        s.engine = { qi: 0, turnNo: 0, utt: 0, state: 'ready', followupIndex: 0, followupText: '', chunks: 0, bytes: 0, revision: 0, skipped: 0, current: null, utteranceId: null };
+        s.engine = { qi: 0, turnNo: 0, utt: 0, state: 'ready', followupIndex: 0, followupText: '', chunks: 0, bytes: 0, revision: 0, skipped: 0, current: null, utteranceId: null, endpointed: new Set() };
         intro(s);
       }
       return;
@@ -533,13 +548,25 @@ async function handle(req, res) {
     if (b && typeof b.partials === 'boolean') state.config.partials = b.partials;
     return json(res, 200, state.config);
   }
+  // §5.15: simula que el endpointing por silencio cierra el turno de voz actual (sin audio.end):
+  // transcript.final y después turn.end{reason:"endpoint"}.
+  if (p === '/__mock/endpoint' && method === 'POST') {
+    const s = [...state.sessions.values()].find((x) => x.engine?.state === 'listening');
+    if (!s || !s.endpointing || s.engine.bytes < 3200) return json(res, 409, { ok: false });
+    const e = s.engine;
+    e.endpointed.add(e.current.turn_id);
+    e.state = 'processing';
+    const hex = sha256(Buffer.from(`${e.current.turn_id}:${e.bytes}`)).slice(0, 8);
+    finishTurn(s, s.lang === 'en' ? `simulated answer ${hex}` : `respuesta simulada ${hex}`, 'stt', Math.round((e.bytes / 32000) * 1000), 'endpoint');
+    return json(res, 200, { ok: true });
+  }
   if (p === '/__mock/drop-ws' && method === 'POST') {
     let n = 0;
     for (const s of state.sessions.values()) if (s.ws) { s.ws.close(4008, 'test drop'); n += 1; }
     return json(res, 200, { dropped: n });
   }
   if (p === '/__mock/state' && method === 'GET') {
-    return json(res, 200, { sessions: [...state.sessions.values()].map((s) => ({ id: s.id, status: s.status, lastClientSeq: s.lastClientSeq, turns: s.turns, engineState: s.engine?.state ?? null, acks: s.acks, seqErrors: s.seqErrors, unexpectedPlayed: s.unexpectedPlayed, helloSeqs: s.helloSeqs })) });
+    return json(res, 200, { sessions: [...state.sessions.values()].map((s) => ({ id: s.id, status: s.status, lastClientSeq: s.lastClientSeq, turns: s.turns, engineState: s.engine?.state ?? null, acks: s.acks, seqErrors: s.seqErrors, unexpectedPlayed: s.unexpectedPlayed, helloSeqs: s.helloSeqs, helloEndpointing: s.helloEndpointing, lateChunks: s.lateChunks, lateAudioEnd: s.lateAudioEnd, playedSeen: s.playedSeen })) });
   }
 
   if (p === '/v1/health') return json(res, 200, { status: 'ok', version: 'mock' });

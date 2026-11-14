@@ -3,7 +3,7 @@ import { FakeClock, FakeWs, readyData, resetServerSeq, srv } from '../test/fakes
 import { BinCodec, BinKind, SUBPROTOCOL, decodeFrame, encodeFrame } from './contract/ws-types';
 import { DEFAULT_BACKOFF, LiveConnection, backoffDelay, type ConnectionState } from './ws';
 
-function setup(opts: { random?: () => number } = {}) {
+function setup(opts: { random?: () => number; endpointing?: boolean } = {}) {
   const clock = new FakeClock();
   const states: { s: ConnectionState; delay?: number | undefined; close?: number | undefined; err?: string | undefined }[] = [];
   const msgs: { type: string }[] = [];
@@ -19,6 +19,7 @@ function setup(opts: { random?: () => number } = {}) {
     onTtsFrame: (h) => frames.push({ turnNo: h.turnNo, chunkIndex: h.chunkIndex }),
     onState: (s, i) => states.push({ s, delay: i.nextDelayMs, close: i.closeCode, err: i.errorCode }),
     onInvalid: (r) => invalid.push(r),
+    ...(opts.endpointing === undefined ? {} : { endpointing: opts.endpointing }),
   });
   return { c, clock, states, msgs, frames, invalid, ws: () => FakeWs.all[FakeWs.all.length - 1] as FakeWs };
 }
@@ -73,8 +74,18 @@ describe('LiveConnection', () => {
       data: { audio_formats: [{ codec: 'pcm16le', sample_rate: 16000, channels: 1 }], tts_delivery: ['binary', 'url'], tts_formats: ['wav', 'pcm16le'], partials: true, resume: null },
     });
     expect(t.states.map((x) => x.s)).toEqual(['connecting']);
+    expect(hello?.data).not.toHaveProperty('endpointing');
     t.ws().recv(srv('session.ready', readyData()));
     expect(t.c.connectionState).toBe('open');
+  });
+
+  it('§5.15 v1.2: hello.endpointing solo si se pide (true o false)', () => {
+    for (const ep of [true, false]) {
+      const t = setup({ endpointing: ep });
+      t.c.connect();
+      t.ws().open();
+      expect(t.ws().json()[0]).toMatchObject({ type: 'hello', seq: 0, data: { endpointing: ep } });
+    }
   });
 
   it('no manda nada antes de session.ready y luego vacía la cola en orden de seq', () => {

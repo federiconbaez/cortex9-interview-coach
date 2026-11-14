@@ -188,4 +188,52 @@ describe('SessionView', () => {
     expect(played).toEqual(['u-1', 'u-2', 'u-3']);
     expect(t.h.sent.filter((x) => x.type === 'control.repeat')).toEqual([{ type: 'control.repeat', data: { turn_id: 't-1' } }]);
   });
+
+  it('§5.15 v1.2: endpointing en el hello según el modo; turn.end "endpoint" corta la captura sin audio.end ni más audio', async () => {
+    const t = setup('voice');
+    expect(t.o().endpointing).toBe(true);
+    t.open({ endpointing: { enabled: true, mode: 'energy', silence_ms: 700 } });
+    t.send('question', question());
+    expect(screen.getByTestId('endpoint-hint')).toHaveTextContent('0,7 s');
+    await userEvent.click(screen.getByTestId('answer-toggle'));
+    act(() => t.h.mic?.onChunk(new Uint8Array(3200), false));
+    expect(t.h.audio).toHaveLength(1);
+    t.send('transcript.final', { turn_id: 't-1', text: 'hice 3 cosas', low_confidence: [], confidence: 0.9, duration_ms: 900 });
+    t.send('turn.end', { turn_id: 't-1', reason: 'endpoint', next: 'question', followups_used: 0, max_followups: 1 });
+    expect(t.h.micCalls.at(-1)).toBe('cancel');
+    act(() => {
+      t.h.mic?.onChunk(new Uint8Array(3200), false);
+      t.h.mic?.onVad?.('speech_end');
+    });
+    expect(t.h.audio).toHaveLength(1);
+    expect(t.h.sent.filter((m) => m.type === 'audio.end')).toEqual([]);
+    expect(screen.getByTestId('answer-status')).toHaveTextContent(es['practice.processing']);
+    expect(screen.getByTestId('transcript')).toHaveTextContent('hice 3 cosas');
+    // turn.end de otro turno no toca la captura en curso
+    t.send('question', question({ turn_id: 't-2', question_id: 'q2', index: 2, utterance_id: 'u-2' }));
+    await userEvent.click(screen.getByTestId('answer-toggle'));
+    const calls = t.h.micCalls.length;
+    t.send('turn.end', { turn_id: 't-1', reason: 'endpoint', next: 'question', followups_used: 0, max_followups: 1 });
+    expect(t.h.micCalls).toHaveLength(calls);
+  });
+
+  it('§5.15 v1.2: push-to-talk apaga el endpointing; por escrito no se manda', () => {
+    expect(setup('voice', 'ptt').o().endpointing).toBe(false);
+    expect(setup('text').o()).not.toHaveProperty('endpointing');
+  });
+
+  it('§5.14 v1.2: si el audio de la pregunta falla, se avisa tts.played igual (una vez)', async () => {
+    const t = setup('voice');
+    t.open();
+    t.send('question', question());
+    t.send('tts.audio', { turn_id: 't-1', utterance_id: 'u-1', format: 'wav', sample_rate: 16000, chunks: 1, bytes: 4, duration_ms: 1, sha256: '00'.repeat(32) });
+    await act(async () => {
+      t.o().onTtsFrame?.({ kind: 2, seq: 9, turnNo: 1, chunkIndex: 0, codec: 2, last: true, payloadLen: 4 } as never, new Uint8Array(4));
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(t.h.element?.played).toBe(0);
+    expect(t.h.sent.filter((m) => m.type === 'tts.played')).toEqual([{ type: 'tts.played', data: { utterance_id: 'u-1' } }]);
+    await userEvent.click(screen.getByTestId('answer-toggle'));
+    expect(t.h.sent.filter((m) => m.type === 'tts.played')).toHaveLength(1);
+  });
 });
