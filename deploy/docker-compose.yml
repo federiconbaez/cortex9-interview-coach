@@ -142,8 +142,6 @@ services:
     restart: unless-stopped
     depends_on:
       backend: { condition: service_healthy }
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # daemon de subtítulos en el host (:8091); con compose debe escuchar en la IP del bridge (CX9_CAPTIONS_BIND)
     ports:
       - "127.0.0.1:${CX9_FRONTEND_PORT:-5173}:8080"
     read_only: true
