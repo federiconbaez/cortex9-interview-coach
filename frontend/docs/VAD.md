@@ -36,4 +36,6 @@ cuadro explícita y `reset`. `mic.test.ts` prueba el VAD dentro de la captura co
 - Es un VAD de energía: con ruido fuerte y variable (TV, gente hablando) puede cortar tarde o
   no cortar. Para esos casos está el push-to-talk (barra espaciadora o botón).
 - El e2e no cubre el corte automático real (el micrófono falso de Chromium es un tono continuo).
+  Lo mismo vale para `test:e2e:real` contra el backend Go: las respuestas se terminan con el
+  botón (la de 4,5 s prueba la ventana de 96 KB y los mensajes `ack`, no el VAD).
 - `getUserMedia` pide `echoCancellation` y `noiseSuppression`; el resultado depende del navegador.

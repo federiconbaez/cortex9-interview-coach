@@ -31,7 +31,8 @@ frontend/
 │   ├── i18n/                      es.ts (fuente de claves) y en.ts (mismo tipo)
 │   └── App.tsx                    auth, navegación, idioma, foco
 ├── public/capture-worklet.js      procesador del AudioWorklet (archivo aparte por la CSP)
-├── mock-server/server.mjs         mock del contrato para los e2e (no es el backend real)
+├── mock-server/server.mjs         mock del contrato v1.1 para los e2e (no es el backend real)
+├── e2e-real/                      e2e contra el backend Go real (`npm run test:e2e:real`)
 ├── e2e/                           Playwright
 └── docs/                          VAD.md, ACCESIBILIDAD.md
 ```
@@ -41,15 +42,23 @@ frontend/
   (se puede cambiar con `COACH_BACKEND_URL`). En deploy, `deploy/frontend/nginx.conf` hace lo
   mismo. No hace falta CORS.
 - **Flujo en vivo.** `POST /v1/sessions` → `live_url` → WebSocket con subprotocolo
-  `cx9.live.v1` → `hello` → `session.ready` → `question`/`followup` + `tts.audio` (frames
-  binarios kind 0x02) o `tts.url` → el usuario responde (frames binarios kind 0x01 + `audio.end`,
-  o `answer.text` en sesiones por escrito) → `transcript.partial/final` → `turn.end` →
-  `session.end` → `GET /v1/sessions/{id}/report` (202 con `Retry-After` hasta que esté).
-- **Conexión.** `seq` por dirección (los frames binarios consumen seq), `ack` recorta lo
-  pendiente, ventana `max_inflight_bytes` + `bufferedAmount` (el audio espera, no se descarta),
+  `cx9.live.v1` → `hello` → `session.ready` → presentación (`kind: intro`, `turn_id` `t-0`,
+  índice 0) → `question`/`followup` + `tts.audio` (wav o pcm16le, frames binarios kind 0x02) o
+  `tts.url` → el usuario responde (frames binarios kind 0x01 + `audio.end`,
+  o `answer.text` en sesiones por escrito) → `transcript.partial/final` → `turn.end` → … →
+  cierre (`kind: closing`, `t-0`, índice = total) → `session.end` → `GET /v1/sessions/{id}/report` (202 con `Retry-After` hasta que esté).
+- **Conexión (contrato v1.1).** `seq` por dirección (los frames binarios consumen seq). `hello`
+  va siempre con seq 0 y no consume seq. Los mensajes del servidor se ordenan y deduplican por
+  seq (`session.ready` puede llegar antes que lo reenviado; si falta un seq 2 s, se sigue en
+  orden). El mensaje `ack` (seq 0, cada 250 ms o 32 KB) y el `ack` del sobre recortan lo
+  pendiente y mueven la ventana `max_inflight_bytes` (96 KB) + `bufferedAmount` (el audio espera, no se descarta),
   ping cada `heartbeat_ms`, reconexión si no llega nada en `idle_timeout_ms`, backoff
   0,5/1/2/4/8 s con jitter dentro de 120 s, `resume.last_server_seq` y reenvío de lo que el
-  servidor no recibió. Los cierres 1000, 4001, 4003, 4004, 4009 y 4010 no se reintentan.
+  servidor no recibió, con su seq original. Los cierres 1000, 4001, 4003, 4004, 4009 y 4010 no se
+  reintentan; 4001 y cualquier 401 `UNAUTHENTICATED` vuelven al login con aviso.
+- **Turnos.** `repeat: true` marca una re-emisión: `control.repeat` repite el mismo turno; tras
+  `NO_AUDIO` o un fallo de STT llega `turn.end` con `next: repeat` y la misma pregunta con
+  `turn_id` nuevo. Con `tts_delivery: none` no se manda `tts.played`; tampoco para el cierre.
 - **Build:** `dist/` (lo copia `deploy/frontend/Dockerfile`).
 
 ## Cómo correr
@@ -82,12 +91,24 @@ npm run lint                     # eslint, 0 warnings permitidos
 npm test                         # Vitest + cobertura v8 (jsdom, sin red)
 npx playwright install chromium  # una vez
 npm run test:e2e                 # Playwright contra el mock, Chromium con medios falsos
+npm run test:e2e:real            # opcional: contra el backend Go real (necesita Go; no está en CI)
 ```
 
 Los e2e levantan el mock en `127.0.0.1:8787` y `vite build && vite preview` en
 `127.0.0.1:4173` con la misma CSP que `deploy/frontend/nginx.conf`. Chromium se lanza con
 `--use-fake-device-for-media-stream` y `--use-fake-ui-for-media-stream`. Ningún test usa red
-externa. `forbidOnly` está activo y no hay tests `skip`/`todo`.
+externa. `forbidOnly` está activo y no hay tests `skip`/`todo`. El mock acepta
+`POST /__mock/config` (`{"tts":"none"}`, `{"partials":false}`) para probar esos modos.
+
+### e2e contra el backend real (`npm run test:e2e:real`)
+
+`playwright.real.config.ts` corre `e2e-real/backend.mjs`, que compila `../backend/cmd/coach`
+a un directorio temporal (o usa el binario de `CX9_COACH_BIN`) y levanta `coach speech-mock`
+(127.0.0.1:18590) y `coach serve` (127.0.0.1:18580) con SQLite temporal, `CX9_LLM_PROVIDER=mock`,
+contraseña `practica` y `CX9_CORS_ORIGINS=http://127.0.0.1:4174` (el backend compara el `Origin`
+del WebSocket con esa lista). El preview queda en 4174 apuntando a ese backend. Al terminar se
+borra el directorio temporal. No forma parte de `test:e2e` ni del CI. Sin `CX9_COACH_BIN`
+compila el árbol de trabajo de `backend/`, con lo que haya sin commitear.
 
 ### Comandos de CI (`.github/workflows/ci.yml`, de Apex; no se edita desde acá)
 
@@ -98,20 +119,22 @@ externa. `forbidOnly` está activo y no hay tests `skip`/`todo`.
 
 ## Resultados medidos
 
-Corrida desde un clon limpio del commit de código `ea0c06b445951deb91fd69d0ee8f5421ee2d0c1d`,
-con Node v22.23.5, el 14/11/2026:
+Corrida desde un clon limpio del commit `436f2a1` (código y tests; los docs no cambian el
+resultado), con Node v22.23.5, el 14/11/2026:
 
 - `npm ci`: 267 paquetes.
 - `npm run lint` y `npm run typecheck`: sin errores ni warnings.
-- `npm test`: **13 archivos, 94 tests, 94 pasan**, 0 omitidos.
-  Cobertura: sentencias 91,18 % (1282/1406), ramas 80,3 % (787/980), funciones 82,39 % (323/392),
-  líneas 94,46 % (1127/1193).
-- `npm run test:e2e`: **10 tests, 10 pasan** (20,5 s); 4 de ellos hacen en total 6 chequeos axe (WCAG 2.0/2.1 A y AA).
-- `npm run build`: `dist/` = 233 105 bytes (JS 226 887 B, 71,90 kB gzip; CSS 5 374 B;
+- `npm test`: **13 archivos, 107 tests, 107 pasan**, 0 omitidos.
+  Cobertura: sentencias 91,92 % (1366/1486), ramas 82,42 % (882/1070), funciones 83,37 % (341/409),
+  líneas 94,91 % (1194/1258).
+- `npm run test:e2e`: **14 tests, 14 pasan** (31,2 s); 5 de ellos hacen en total 7 chequeos axe (WCAG 2.0/2.1 A y AA).
+- `npm run test:e2e:real` con el backend compilado del commit `7f510cf` (backend/ igual que en
+  `a1be862`): **2 tests, 2 pasan** (18,5 s), con 2 chequeos axe.
+- `npm run build`: `dist/` = 236 755 bytes (JS 230 483 B, 73,02 kB gzip; CSS 5 428 B;
   `capture-worklet.js` 381 B; `index.html` 463 B).
 
-Tests unitarios por archivo: ws 19, vad 9, views (SetupForm, ReportView, HistoryView, perfil) 9,
-live 8, pcm 7, client 7, App 6, SessionView 6, tts 6, i18n 6, history 4, profile 4, mic 3.
+Tests unitarios por archivo: ws 23, live 11, views (SetupForm, ReportView, HistoryView, perfil) 10,
+vad 9, App 8, client 8, SessionView 8, pcm 7, tts 6, i18n 6, history 4, profile 4, mic 3.
 
 ## Qué está probado y qué no
 
@@ -119,9 +142,10 @@ Probado:
 
 - VAD con PCM sintético (silencio, ruido, clics, pausas, ruido fuerte que sube el umbral).
 - Re-muestreo 48 kHz → 16 kHz sin perder muestras entre bloques; chunks de 3200 bytes; flag de último chunk.
-- WebSocket con socket y reloj falsos: hello, seq compartido JSON/binario, ack, ventana de bytes,
-  `bufferedAmount`, ping/pong, backoff, gracia de 120 s, cierres terminales, resume con reenvío
-  ordenado, deduplicación, mensajes inválidos o de tipo desconocido.
+- WebSocket con socket y reloj falsos: hello con seq 0, seq compartido JSON/binario, mensajes
+  `ack` que mueven la ventana de 96 KB, `bufferedAmount`, ping/pong, backoff, gracia de 120 s,
+  cierres terminales, resume con hello seq 0 y reenvío con seq originales, orden y
+  deduplicación por seq (incluido el hueco de 2 s), mensajes inválidos o de tipo desconocido.
 - Frames binarios: `encodeFrame`/`decodeFrame` de `ws-types.ts`.
 - TTS: ensamblado, errores de orden o tamaño, PCM → WAV, sha256 y reproductor.
 - Cliente REST con `fetch` falso: Idempotency-Key, filtros, 202/409 del informe, 404/ETag/412 del perfil, errores.
@@ -130,16 +154,25 @@ Probado:
 - Componentes con Testing Library: sesión por voz, push-to-talk, permiso de micrófono denegado,
   sesión por texto, controles, errores, reconexión; formulario; informe con 202; historial; perfil.
 - e2e: login, i18n, aviso de proveedor remoto, voz con VAD y botón, push-to-talk, corte del WS
-  durante una respuesta con reenvío del audio, reconexión 4008 + pausa, historial, perfil con
-  ETag y axe. El e2e de voz corre con la CSP de deploy y verifica que no haya errores de CSP en consola.
+  durante una respuesta con reenvío del audio (hello seq 0 en las dos conexiones), reconexión
+  4008 + pausa, ventana liberada solo por mensajes `ack` (4,5 s de audio sin parciales),
+  `tts_delivery: none`, repetir y `NO_AUDIO`, 401 → login, muletillas y pausas en el informe,
+  historial, perfil con ETag y axe.
+- Backend Go real (`test:e2e:real`): sesión por texto completa (presentación, preguntas,
+  repreguntas, cierre, informe con muletillas detectadas en el texto) y por voz (TTS wav,
+  repetir con `repeat: true`, `NO_AUDIO` con la misma pregunta y `turn_id` nuevo, 4,5 s de audio
+  con mensajes `ack` de seq 0, presentación t-0/índice 0, cierre t-0/índice total, hello seq 0,
+  seq del cliente crecientes, informe). El e2e de voz corre con la CSP de deploy y verifica que no haya errores de CSP en consola.
 
 No probado:
 
-- **Contra el backend real de Go** (Nexus): solo contra `mock-server/`, que es mi lectura del contrato.
+- Contra el backend real: la reconexión con resume, la pausa y `tts_delivery: none` (solo
+  contra el mock). `Turn.stt_fillers` y `Turn.pauses` del detalle de sesión: la UI no pide ese
+  endpoint; el informe muestra `details.muletillas`, `muletillas_fuente` y `details.pausas`.
 - Navegadores distintos de Chromium (Firefox, Safari).
 - El corte automático por silencio con un micrófono real: el dispositivo falso de Chromium emite
   un tono continuo, así que en e2e la respuesta se termina con el botón.
-- Opus y `live-ticket` (no se usan: PCM16 16 kHz es el formato base y la cookie alcanza con el proxy same-origin).
+- `live-ticket` (opcional en v1.1; no se usa: la cookie alcanza con el proxy same-origin).
 - Contraste en modo oscuro: axe corre con el esquema claro.
 
 ## Supuestos sobre el contrato
@@ -147,8 +180,12 @@ No probado:
 Están marcados en el código y en el informe de la entrega; los principales:
 
 - `answer.text` solo en sesiones `input: text`.
-- Las preguntas `kind: intro` y `closing` no se responden.
-- `tts.played` se manda una vez por `utterance_id`, también si el usuario empieza a responder antes de que termine.
+- Las preguntas `kind: intro` y `closing` (`turn_id` `t-0`) no se responden ni muestran "Pregunta N de M".
+- `tts.played` se manda una vez por `utterance_id`, también si el usuario empieza a responder
+  antes de que termine (salvo `tts_delivery: none` y el cierre, como dice v1.1).
+- Si falta un seq del servidor durante 2 s, se procesan los mensajes retenidos en orden (el
+  contrato no fija ese plazo).
+- El cierre 4001 dispara `GET /v1/auth/me`; el 401 de esa llamada lleva al login.
 - `sha256` de `tts.audio` se calcula sobre los bytes concatenados tal como llegan.
 - El cierre 4400 se reintenta salvo que antes llegue un `error` fatal no reintentable.
 - Repetir y saltar solo desde `asking`/`listening` (diagrama de estados del contrato).
