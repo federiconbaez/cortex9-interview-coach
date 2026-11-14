@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+.vite/
+coverage/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Modelos y audio (nunca se versionan)
+models/
+*.onnx
+*.onnx.json
+*.bin
+*.pt
+*.wav
+*.mp3
+*.ogg
+*.webm
+*.flac
+*.m4a
+
+# Datos locales
+/data/
+**/local-data/
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+
+# Editor / SO
+.DS_Store
+.idea/
+.vscode/
