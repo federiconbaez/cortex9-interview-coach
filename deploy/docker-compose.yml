@@ -1,0 +1,181 @@
+# CORTEX-9 Interview Coach: stack local completo.
+#
+#   cp deploy/.env.example deploy/.env   # y completá los valores
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
+#
+# Reglas:
+# - Todo puerto publicado se ata a 127.0.0.1 (nunca 0.0.0.0).
+# - speech y postgres no se publican y viven en la red "backplane" (internal: sin salida a Internet).
+# - Solo backend tiene salida (red "egress"), y solo para el proveedor LLM que elijas.
+# - Secretos únicamente desde .env (no hay valores reales en este archivo).
+
+name: cortex9-interview-coach
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  backplane:
+    internal: true
+  egress: {}
+
+volumes:
+  pgdata: {}
+  prometheus-data: {}
+  grafana-data: {}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cx9}
+      POSTGRES_USER: ${POSTGRES_USER:-cx9}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definí POSTGRES_PASSWORD en deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backplane]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 256m
+    logging: *logging
+
+  speech:
+    build:
+      context: ../speech
+      args:
+        WITH_MODELS: ${SPEECH_WITH_MODELS:-true}
+    image: cortex9/speech:local
+    restart: unless-stopped
+    environment:
+      CX9_SPEECH_MODE: ${CX9_SPEECH_MODE:-real}
+      CX9_SPEECH_TOKEN: ${CX9_SPEECH_TOKEN:-}
+      SPEECH_HOST: 0.0.0.0
+      SPEECH_PORT: "8090"
+      SPEECH_WHISPER_MODEL: ${SPEECH_WHISPER_MODEL:-small}
+      SPEECH_WHISPER_DOWNLOAD_ROOT: /models/whisper
+      SPEECH_WHISPER_LOCAL_ONLY: "true"
+      SPEECH_WHISPER_CPU_THREADS: ${SPEECH_WHISPER_CPU_THREADS:-2}
+      SPEECH_PIPER_VOICE_ES_AR: /models/piper/${SPEECH_PIPER_VOICE_ES_AR_FILE:-es_AR-daniela-high.onnx}
+      SPEECH_PIPER_VOICE_EN_US: /models/piper/${SPEECH_PIPER_VOICE_EN_US_FILE:-en_US-lessac-medium.onnx}
+      SPEECH_MAX_CONCURRENCY: ${SPEECH_MAX_CONCURRENCY:-1}
+    volumes:
+      - ${CX9_MODELS_DIR:-../models}:/models:ro
+    tmpfs:
+      - /tmp:size=64m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backplane]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
+    mem_limit: ${SPEECH_MEM_LIMIT:-1g}
+    logging: *logging
+
+  backend:
+    # Dockerfile a cargo de Nexus en backend/Dockerfile (debe escuchar en :8080 y exponer /metrics).
+    build:
+      context: ../backend
+    image: cortex9/backend:local
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      speech: { condition: service_healthy }
+    environment:
+      CX9_ENV: ${CX9_ENV:-prod}
+      CX9_HTTP_ADDR: 0.0.0.0:8080
+      CX9_DATABASE_URL: postgres://${POSTGRES_USER:-cx9}:${POSTGRES_PASSWORD:?definí POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cx9}?sslmode=disable
+      CX9_SPEECH_URL: http://speech:8090
+      CX9_SPEECH_TOKEN: ${CX9_SPEECH_TOKEN:-}
+      CX9_PASSWORD_HASH: ${CX9_PASSWORD_HASH:-}
+      CX9_CORS_ORIGINS: ${CX9_CORS_ORIGINS:-}
+      CX9_LOG_TRANSCRIPTS: ${CX9_LOG_TRANSCRIPTS:-0}
+      CX9_LLM_PROVIDER: ${CX9_LLM_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # para Ollama corriendo en el host
+    ports:
+      - "127.0.0.1:${CX9_BACKEND_PORT:-8080}:8080"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backplane, egress]
+    mem_limit: 256m
+    logging: *logging
+
+  frontend:
+    # Build del frontend (Cronos) servido por nginx con proxy same-origin a /v1 (contrato §2.5).
+    build:
+      context: ../frontend
+      dockerfile: ../deploy/frontend/Dockerfile
+      additional_contexts:
+        deploy: ./frontend
+    image: cortex9/frontend:local
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "127.0.0.1:${CX9_FRONTEND_PORT:-5173}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backplane, egress]
+    mem_limit: 64m
+    logging: *logging
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.listen-address=0.0.0.0:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks: [backplane, egress]
+    mem_limit: 256m
+    logging: *logging
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?definí GRAFANA_ADMIN_PASSWORD en deploy/.env}
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Nada sale de la máquina: sin telemetría, chequeo de updates ni noticias.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_FEEDBACK_LINKS_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    networks: [backplane, egress]
+    mem_limit: 256m
+    logging: *logging

@@ -1,0 +1,12 @@
+# Opcional, solo para depurar: publica speech y postgres en 127.0.0.1.
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.debug.yml --env-file deploy/.env up
+# Ojo: para poder publicarlos se suman a la red "egress", que sí tiene salida a Internet.
+services:
+  speech:
+    networks: [backplane, egress]
+    ports:
+      - "127.0.0.1:${CX9_SPEECH_PORT:-8090}:8090"
+  postgres:
+    networks: [backplane, egress]
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

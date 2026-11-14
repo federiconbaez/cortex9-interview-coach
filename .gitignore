@@ -51,3 +51,6 @@ pgdata/
 .DS_Store
 .idea/
 .vscode/
+
+# Logs del modo sin Docker
+deploy/local/logs/
