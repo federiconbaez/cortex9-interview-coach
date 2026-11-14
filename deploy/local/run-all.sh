@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Levanta speech, backend y frontend sin Docker. Ctrl+C los detiene a todos.
-# Postgres: usá uno local (pg_isready) o CX9_SKIP_DB=1. Prometheus/Grafana solo vienen en el modo Docker.
+# Base: SQLite en deploy/local/local-data/ (o CX9_LOCAL_DB=postgres). Prometheus/Grafana solo vienen en el modo Docker.
 # shellcheck source=common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 load_env
@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [[ "${CX9_SKIP_DB:-0}" != "1" ]]; then
+if [[ "${CX9_LOCAL_DB:-sqlite}" == "postgres" ]]; then
     if command -v pg_isready >/dev/null 2>&1 && pg_isready -h 127.0.0.1 -p "${POSTGRES_PORT:-5432}" -q; then
         echo "postgres OK en 127.0.0.1:${POSTGRES_PORT:-5432}"
     else

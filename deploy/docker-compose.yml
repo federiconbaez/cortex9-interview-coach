@@ -24,6 +24,7 @@ networks:
 
 volumes:
   pgdata: {}
+  backend-data: {}
   prometheus-data: {}
   grafana-data: {}
 
@@ -83,7 +84,8 @@ services:
     logging: *logging
 
   backend:
-    # Dockerfile a cargo de Nexus en backend/Dockerfile (debe escuchar en :8080 y exponer /metrics).
+    # backend/Dockerfile (Nexus): distroless sin shell, binario en /app/coach, usuario 65532,
+    # /metrics en el mismo puerto. El healthcheck usa el propio binario (GET /v1/health en loopback).
     build:
       context: ../backend
     image: cortex9/backend:local
@@ -95,11 +97,14 @@ services:
       CX9_ENV: ${CX9_ENV:-prod}
       CX9_HTTP_ADDR: 0.0.0.0:8080
       CX9_DATABASE_URL: postgres://${POSTGRES_USER:-cx9}:${POSTGRES_PASSWORD:?definí POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cx9}?sslmode=disable
+      CX9_DATA_DIR: /data
       CX9_SPEECH_URL: http://speech:8090
       CX9_SPEECH_TOKEN: ${CX9_SPEECH_TOKEN:-}
-      CX9_PASSWORD_HASH: ${CX9_PASSWORD_HASH:-}
+      # Obligatorio: CX9_DEV_NO_AUTH solo se acepta en loopback y el contenedor escucha en 0.0.0.0.
+      CX9_PASSWORD_HASH: ${CX9_PASSWORD_HASH:?definí CX9_PASSWORD_HASH en deploy/.env (coach hash-password)}
       CX9_CORS_ORIGINS: ${CX9_CORS_ORIGINS:-}
       CX9_LOG_TRANSCRIPTS: ${CX9_LOG_TRANSCRIPTS:-0}
+      CX9_LOG_FORMAT: ${CX9_LOG_FORMAT:-json}
       CX9_LLM_PROVIDER: ${CX9_LLM_PROVIDER:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -109,10 +114,21 @@ services:
       - "host.docker.internal:host-gateway"   # para Ollama corriendo en el host
     ports:
       - "127.0.0.1:${CX9_BACKEND_PORT:-8080}:8080"
+    volumes:
+      - backend-data:/data   # audio guardado (save_audio) y datos locales; el volumen hereda el dueño 65532 de la imagen
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    healthcheck:
+      test: ["CMD", "/app/coach", "healthcheck"]
+      interval: 15s
+      timeout: 4s
+      start_period: 10s
+      retries: 3
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     networks: [backplane, egress]
-    mem_limit: 256m
+    mem_limit: 256m   # argon2id usa 64 MiB por login
     logging: *logging
 
   frontend:
@@ -124,7 +140,8 @@ services:
         deploy: ./frontend
     image: cortex9/frontend:local
     restart: unless-stopped
-    depends_on: [backend]
+    depends_on:
+      backend: { condition: service_healthy }
     ports:
       - "127.0.0.1:${CX9_FRONTEND_PORT:-5173}:8080"
     read_only: true

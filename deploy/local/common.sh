@@ -21,8 +21,13 @@ load_env() {
     export CX9_SPEECH_URL="http://127.0.0.1:${SPEECH_PORT}"
     export CX9_HTTP_ADDR="127.0.0.1:${CX9_BACKEND_PORT:-8080}"
     export CX9_ENV="${CX9_ENV_LOCAL:-dev}"
-    if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
-        export CX9_DATABASE_URL="${CX9_DATABASE_URL:-postgres://${POSTGRES_USER:-cx9}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-cx9}?sslmode=disable}"
+    # Base local: SQLite (por defecto) o un Postgres propio en 127.0.0.1 con CX9_LOCAL_DB=postgres.
+    export CX9_DATA_DIR="${CX9_DATA_DIR_LOCAL:-$ROOT/deploy/local/local-data}"
+    mkdir -p "$CX9_DATA_DIR"
+    if [[ "${CX9_LOCAL_DB:-sqlite}" == "postgres" ]]; then
+        export CX9_DATABASE_URL="postgres://${POSTGRES_USER:-cx9}:${POSTGRES_PASSWORD:?definí POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-cx9}?sslmode=disable"
+    else
+        export CX9_DATABASE_URL="sqlite://$CX9_DATA_DIR/cx9.db"
     fi
 }
 
