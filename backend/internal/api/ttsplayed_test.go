@@ -24,7 +24,10 @@ func ttsSession(t *testing.T, e *env, delivery string) *wsClient {
 }
 
 func TestTTSPlayedNoneAdvancesWithoutWaiting(t *testing.T) {
-	e := newEnv(t, func(_ *config.Config, o *live.Options) { o.TTSPlayedTimeout = time.Minute; o.TTSPlayedGrace = time.Minute })
+	e := newEnv(t, func(_ *config.Config, o *live.Options) {
+		o.TTSPlayedTimeout = time.Minute
+		o.TTSPlayedGrace = time.Minute
+	})
 	e.speech.say("Hice APIs en Go.")
 	w := ttsSession(t, e, "none")
 	start := time.Now()
