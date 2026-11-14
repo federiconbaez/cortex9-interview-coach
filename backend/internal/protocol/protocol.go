@@ -135,7 +135,9 @@ type Hello struct {
 	TTSDelivery  []string      `json:"tts_delivery"`
 	TTSFormats   []string      `json:"tts_formats,omitempty"`
 	Partials     *bool         `json:"partials,omitempty"`
-	Resume       *Resume       `json:"resume"`
+	// Endpointing por silencio para esta conexión (default true; false = solo audio.end).
+	Endpointing *bool   `json:"endpointing,omitempty"`
+	Resume      *Resume `json:"resume"`
 }
 
 type SessionReady struct {
@@ -151,6 +153,15 @@ type SessionReady struct {
 	LastClientSeq    uint32      `json:"last_client_seq"`
 	QuestionIndex    int         `json:"question_index"`
 	QuestionCount    int         `json:"question_count"`
+	// Endpointing efectivo de la conexión (v1.2).
+	Endpointing *EndpointInfo `json:"endpointing,omitempty"`
+}
+
+// EndpointInfo dice si el servidor cierra el turno solo por silencio.
+type EndpointInfo struct {
+	Enabled   bool   `json:"enabled"`
+	Mode      string `json:"mode"` // off | stt | energy | auto
+	SilenceMs int    `json:"silence_ms"`
 }
 
 type Question struct {

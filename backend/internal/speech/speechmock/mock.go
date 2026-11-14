@@ -167,13 +167,57 @@ func stt(w http.ResponseWriter, r *http.Request) {
 	if outLang == "auto" {
 		outLang = "es"
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	out := map[string]any{
 		"text": finalText, "language": outLang, "duration_s": dur, "confidence": conf,
 		"segments": []map[string]any{{"start_s": 0.0, "end_s": dur, "text": finalText, "confidence": conf, "words": words}},
 		"engine":   "mock", "model": "mock", "processing_ms": 0,
 		"fillers": nonNil(fillers), "filler_count": len(fillers), "pauses": []any{},
-	})
+	}
+	// Endpointing (v1.2): en parciales el mock informa speech_ended_ms y
+	// trailing_silence_ms con un VAD de energía determinista sobre el PCM
+	// (X-Mock-VAD: off los omite, como un servicio viejo; X-Mock-Speech-Ended-Ms
+	// y X-Mock-Trailing-Silence-Ms los fijan).
+	if r.URL.Query().Get("partial") == "true" && r.Header.Get("X-Mock-VAD") != "off" {
+		ended, trailing := mockVAD(body, mt == "audio/l16", dur)
+		if v, err := strconv.Atoi(r.Header.Get("X-Mock-Speech-Ended-Ms")); err == nil {
+			ended = v
+		}
+		if v, err := strconv.Atoi(r.Header.Get("X-Mock-Trailing-Silence-Ms")); err == nil {
+			trailing = v
+		}
+		if ended >= 0 {
+			out["speech_ended_ms"] = ended
+		}
+		out["trailing_silence_ms"] = trailing
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// mockVAD: frames de 20 ms con RMS >= 500 son voz. Devuelve el fin de la última
+// voz (-1 si no hubo) y el silencio final, en ms.
+func mockVAD(body []byte, l16 bool, dur float64) (endedMs, trailingMs int) {
+	pcm := body
+	if !l16 && len(pcm) >= 44 {
+		pcm = pcm[44:]
+	}
+	const frame = 640
+	last := -1
+	for i := 0; i+frame <= len(pcm); i += frame {
+		var sum float64
+		for j := i; j < i+frame; j += 2 {
+			v := float64(int16(binary.LittleEndian.Uint16(pcm[j:])))
+			sum += v * v
+		}
+		if math.Sqrt(sum/(frame/2)) >= 500 {
+			last = (i + frame) / 32
+		}
+	}
+	total := int(dur*1000 + 0.5)
+	if last < 0 {
+		return -1, total
+	}
+	return last, total - last
 }
 
 var hesitation = regexp.MustCompile(`^(?:e+h+|e+m+|m+|u+m+|u+h+|e+r+)$`)

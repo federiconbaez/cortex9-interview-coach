@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/endpoint"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/llm"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/secret"
 )
@@ -35,6 +36,11 @@ type Config struct {
 	PartialWindow   time.Duration
 	ReconnectGrace  time.Duration
 	Version         string
+	// Endpointing por silencio (v1.2) y espera de tts.played.
+	Endpoint            endpoint.Config
+	SpeculativeFollowup bool
+	TTSPlayedGrace      time.Duration
+	TTSPlayedTimeout    time.Duration
 }
 
 func env(k, def string) string {
@@ -114,6 +120,39 @@ func Load() (*Config, error) {
 	if c.MaxTurnMs, err = envInt("CX9_MAX_TURN_MS", 300000); err != nil {
 		return nil, err
 	}
+	ep := endpoint.Default()
+	ep.Mode = strings.ToLower(env("CX9_ENDPOINT_MODE", ep.Mode))
+	if ep.SilenceMs, err = envInt("CX9_ENDPOINT_SILENCE_MS", ep.SilenceMs); err != nil {
+		return nil, err
+	}
+	if ep.GraceMs, err = envInt("CX9_ENDPOINT_GRACE_MS", ep.GraceMs); err != nil {
+		return nil, err
+	}
+	if ep.MinVoiceMs, err = envInt("CX9_ENDPOINT_MIN_VOICE_MS", ep.MinVoiceMs); err != nil {
+		return nil, err
+	}
+	if v := env("CX9_ENDPOINT_RMS", ""); v != "" {
+		if ep.RMS, err = strconv.ParseFloat(v, 64); err != nil {
+			return nil, fmt.Errorf("CX9_ENDPOINT_RMS: número inválido %q", v)
+		}
+	}
+	if err := ep.Validate(); err != nil {
+		return nil, err
+	}
+	c.Endpoint = ep
+	c.SpeculativeFollowup = !strings.EqualFold(env("CX9_SPECULATIVE_FOLLOWUP", "true"), "false") && env("CX9_SPECULATIVE_FOLLOWUP", "1") != "0"
+	g, err := envInt("CX9_TTS_PLAYED_GRACE_MS", 3000)
+	if err != nil {
+		return nil, err
+	}
+	to, err := envInt("CX9_TTS_PLAYED_TIMEOUT_MS", 20000)
+	if err != nil {
+		return nil, err
+	}
+	if g < 0 || g > 60000 || to < 1000 || to > 300000 {
+		return nil, fmt.Errorf("CX9_TTS_PLAYED_GRACE_MS debe estar en 0-60000 y CX9_TTS_PLAYED_TIMEOUT_MS en 1000-300000")
+	}
+	c.TTSPlayedGrace, c.TTSPlayedTimeout = time.Duration(g)*time.Millisecond, time.Duration(to)*time.Millisecond
 	lc := llm.ProviderConfig{
 		Default:        env("CX9_LLM_PROVIDER", "mock"),
 		OpenAIKey:      secret.New(env("OPENAI_API_KEY", "")),

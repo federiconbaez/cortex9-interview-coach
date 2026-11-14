@@ -136,3 +136,28 @@ func TestExtensionsTolerated(t *testing.T) {
 		t.Fatal("sin extensión = nil")
 	}
 }
+
+func TestSTTPartialEndpointFieldsFromMock(t *testing.T) {
+	c, _ := newMock(t)
+	// 1 s de "voz" (onda cuadrada de amplitud 4000) + 0,8 s de silencio
+	audio := append(bytes.Repeat([]byte{0xa0, 0x0f, 0x60, 0xf0}, 8000), make([]byte, 25600)...)
+	r, err := c.STT(context.Background(), audio, STTOptions{Language: "es", Partial: true, AudioSecs: 1.8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	se, tr := r.Endpoint()
+	if se == nil || tr == nil || *se != 1000 || *tr != 800 {
+		t.Fatalf("%v %v", se, tr)
+	}
+	f, err := c.STT(context.Background(), audio, STTOptions{Language: "es", AudioSecs: 1.8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if se, tr := f.Endpoint(); se != nil || tr != nil {
+		t.Fatal("el final no trae campos de endpointing en el mock")
+	}
+	neg := -1.0
+	if se, _ := (&STTResult{SpeechEndedMs: &neg}).Endpoint(); se != nil {
+		t.Fatal("negativo = ausente")
+	}
+}

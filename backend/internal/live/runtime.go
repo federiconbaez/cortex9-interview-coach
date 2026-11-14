@@ -18,9 +18,9 @@ import (
 
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/analysis"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/coach"
+	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/endpoint"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/engine"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/llm"
-	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/profile"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/protocol"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/speech"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/store"
@@ -81,11 +81,27 @@ type Runtime struct {
 	partialAt       int
 
 	listenTimer *time.Timer
-	thinkGen    int
-	pauseGen    int
-	graceGen    int
-	persisted   int
-	closeCode   int
+	lastPlayed  int // último utterance con tts.played (duplicados y viejos se ignoran)
+
+	// endpointing por silencio (endpointing.go)
+	epDisabled     bool
+	endpointedTurn int
+	ep             *endpoint.Detector
+	epCand         *endpoint.Candidate
+	epTimer        *time.Timer
+	epGen          int
+	marks          []chunkMark
+	lastPartial    partialSnap
+	spec           *specState
+	voiceEndAt     time.Time
+	latMode        string
+	latUtt         int
+	sttStart       time.Time
+	thinkGen       int
+	pauseGen       int
+	graceGen       int
+	persisted      int
+	closeCode      int
 
 	learnWG sync.WaitGroup
 	learnMu sync.Mutex
@@ -263,6 +279,7 @@ func (rt *Runtime) negotiate(h protocol.Hello) bool {
 		rt.ttsFormat = "wav"
 	}
 	rt.partials = h.Partials == nil || *h.Partials
+	rt.epDisabled = h.Endpointing != nil && !*h.Endpointing
 	return ok
 }
 
@@ -316,7 +333,7 @@ func (rt *Runtime) attach(c *Conn, hm helloMsg) {
 	rt.send(protocol.TSessionReady, protocol.SessionReady{State: state, AudioFormat: rt.audioFmt, TTSDelivery: rt.ttsDelivery,
 		TTSFormat: rt.ttsFormat, HeartbeatMs: int(rt.opt.Heartbeat / time.Millisecond), IdleTimeoutMs: int(rt.opt.IdleTimeout / time.Millisecond),
 		MaxInflightBytes: rt.opt.MaxInflightBytes, MaxTurnMs: rt.opt.MaxTurnMs, Resumed: resumed, LastClientSeq: rt.lastClient,
-		QuestionIndex: rt.eng.QuestionIndex(), QuestionCount: rt.eng.QuestionCount()})
+		QuestionIndex: rt.eng.QuestionIndex(), QuestionCount: rt.eng.QuestionCount(), Endpointing: rt.endpointInfo()})
 	for _, m := range replay {
 		rt.deliver(m)
 	}
@@ -463,6 +480,9 @@ func (rt *Runtime) onText(c *Conn, data []byte) {
 		if !decode(&a) || a.TurnID == "" {
 			return
 		}
+		if rt.eng.State() == engine.Listening && a.TurnID == rt.eng.CurrentTurnID() {
+			rt.markVoiceEnd(time.Now(), "explicit")
+		}
 		rt.endAudio(a.TurnID, "audio_end")
 	case protocol.TAnswerText:
 		var a protocol.AnswerText
@@ -504,6 +524,10 @@ func (rt *Runtime) onText(c *Conn, data []byte) {
 			return
 		}
 		if n, ok := parseNo(p.UtteranceID, "u-"); ok {
+			if n <= rt.lastPlayed {
+				break // duplicado o de una intervención vieja: se ignora sin error
+			}
+			rt.lastPlayed = n
 			if n == rt.eng.UtteranceNo() {
 				rt.stopListenTimer()
 			}
@@ -548,6 +572,8 @@ func parseNo(id, prefix string) (int, bool) {
 func (rt *Runtime) resetAudio() {
 	rt.buf, rt.nextChunk, rt.audioTurn = nil, 0, 0
 	rt.stopPartials()
+	rt.cancelEndpoint()
+	rt.ep = nil
 }
 
 func (rt *Runtime) conflictOnce(turn int, msg string) {
@@ -559,8 +585,10 @@ func (rt *Runtime) conflictOnce(turn int, msg string) {
 }
 
 func (rt *Runtime) audio(turnNo int, idx uint32, pcm []byte) {
-	if rt.tooLongTurn == turnNo && turnNo != 0 {
-		return // chunks posteriores a max_turn_ms se descartan
+	if (rt.tooLongTurn == turnNo || rt.endpointedTurn == turnNo) && turnNo != 0 {
+		// chunks posteriores a max_turn_ms o al cierre por endpoint (el cliente
+		// todavía no vio turn.end) se descartan sin error
+		return
 	}
 	if rt.sess.Input == "text" {
 		rt.conflictOnce(turnNo, "Sesión de texto: mandá answer.text.")
@@ -573,6 +601,7 @@ func (rt *Runtime) audio(turnNo int, idx uint32, pcm []byte) {
 	if rt.audioTurn != turnNo {
 		rt.buf, rt.nextChunk, rt.audioTurn = nil, 0, turnNo
 		rt.partialRev, rt.partialAt = 0, 0
+		rt.newTurnAudio()
 	}
 	if idx < rt.nextChunk {
 		return
@@ -596,7 +625,11 @@ func (rt *Runtime) audio(turnNo int, idx uint32, pcm []byte) {
 		rt.endAudio(rt.eng.CurrentTurnID(), "max_duration")
 		return
 	}
-	if rt.partials && rt.partialTimer == nil {
+	rt.onEndpointAudio(turnNo, pcm)
+	if rt.eng.State() != engine.Listening || rt.audioTurn != turnNo {
+		return // el endpointing cerró el turno
+	}
+	if (rt.partials || (rt.ep != nil && rt.ep.UsesSTT())) && rt.partialTimer == nil && !rt.partialInflight {
 		turn := turnNo
 		rt.partialTimer = time.AfterFunc(rt.opt.PartialInterval, func() { rt.post(func() { rt.partialTick(turn) }) })
 	}
@@ -629,6 +662,7 @@ func (rt *Runtime) partialTick(turn int) {
 	}
 	audio := append([]byte(nil), rt.buf[start:]...)
 	total := len(rt.buf)
+	startMs, endMs := start*1000/bytesPerSec, total*1000/bytesPerSec
 	rt.partialAt = total
 	rt.partialInflight = true
 	go func() {
@@ -636,7 +670,8 @@ func (rt *Runtime) partialTick(turn int) {
 			AudioSecs: float64(len(audio)) / bytesPerSec})
 		rt.post(func() {
 			rt.partialInflight = false
-			if err == nil && rt.eng.State() == engine.Listening && rt.audioTurn == turn && strings.TrimSpace(res.Text) != "" {
+			rt.onPartialResult(turn, startMs, endMs, res, err)
+			if rt.partials && err == nil && rt.eng.State() == engine.Listening && rt.audioTurn == turn && strings.TrimSpace(res.Text) != "" {
 				rt.partialRev++
 				rt.send(protocol.TTranscriptPartial, protocol.TranscriptPartial{TurnID: rt.eng.CurrentTurnID(), Text: strings.TrimSpace(res.Text),
 					Revision: rt.partialRev, AudioMs: total * 1000 / bytesPerSec})
@@ -653,6 +688,8 @@ func (rt *Runtime) endAudio(tid, reason string) {
 	}
 	rt.stopPartials()
 	rt.stopListenTimer()
+	rt.cancelEndpoint()
+	rt.ep = nil
 	turn := rt.eng.CurrentTurnNo()
 	audio := rt.buf
 	if rt.audioTurn != turn {
@@ -667,6 +704,7 @@ func (rt *Runtime) endAudio(tid, reason string) {
 		return
 	}
 	secs := float64(len(audio)) / bytesPerSec
+	rt.sttStart = time.Now()
 	go func() {
 		ctx, cancel := context.WithTimeout(rt.ctx, 2*speech.STTTimeout(secs)+2*time.Second)
 		defer cancel()
@@ -678,6 +716,9 @@ func (rt *Runtime) endAudio(tid, reason string) {
 func (rt *Runtime) sttDone(tid string, turn int, secs float64, res *speech.STTResult, err error) {
 	if rt.quit || rt.eng.State() != engine.Processing || rt.eng.CurrentTurnNo() != turn {
 		return
+	}
+	if err == nil {
+		rt.svc.M.TurnStage.WithLabelValues("stt_final").Observe(time.Since(rt.sttStart).Seconds())
 	}
 	if err != nil {
 		if speech.IsNoAudio(err) {
@@ -735,48 +776,26 @@ func (rt *Runtime) finalize(a engine.Answer) {
 	if t := rt.eng.LastTurn(); t != nil && t.ID == a.TurnID && t.Answer != "" && rt.cfg.LearnProfile {
 		rt.learn(*t)
 	}
-	if need {
+	// Primero transcript.final (y lo que siga); después la decisión, que puede
+	// aplicarse en el acto si la especulativa ya está lista.
+	rt.emit(outs)
+	if need && !rt.quit && rt.eng.State() == engine.Processing {
 		rt.decide()
 	}
-	rt.emit(outs)
 }
 
-// decide consulta al LLM si repreguntar (con respaldo local si falla).
+// decide consulta al LLM si repreguntar (con respaldo local si falla). Si hay
+// una decisión especulativa para un parcial igual al texto final, se usa esa.
 func (rt *Runtime) decide() {
 	in := rt.eng.DecisionInput()
-	turn := rt.eng.CurrentTurnNo()
-	hist := make([]llm.QA, 0, len(in.History))
-	for _, h := range in.History {
-		hist = append(hist, llm.QA{Q: h[0], A: h[1]})
+	final := ""
+	if len(in.Answers) > 0 {
+		final = in.Answers[len(in.Answers)-1]
 	}
-	payload := llm.FollowupPayload{Lang: rt.sess.Lang, Question: in.Question.Text, Answers: in.Answers, Probes: in.Question.Probes,
-		AskedProbes: in.AskedProbes, FollowupsDone: in.FollowupsDone, MaxFollowups: in.MaxFollowups, History: hist}
-	if rt.sess.Mode == "story" {
-		if p, _, err := rt.svc.Profile(rt.ctx); err == nil && p != nil {
-			payload.Profile = profile.Summary(p)
-		}
+	if rt.useSpec(rt.eng.CurrentTurnNo(), final) {
+		return
 	}
-	system := llm.FollowupSystem(rt.sess.Lang, rt.cfg.Style)
-	go func() {
-		res, err := llm.Call[llm.FollowupResult](rt.ctx, rt.prov, llm.TaskFollowup, system, payload, 0.3)
-		degraded := ""
-		if err != nil {
-			degraded = err.Error()
-			res = llm.MockFollowup(payload)
-		}
-		rt.post(func() {
-			if rt.quit || rt.eng.State() != engine.Processing || rt.eng.CurrentTurnNo() != turn {
-				return
-			}
-			if degraded != "" {
-				rt.llmErrs = append(rt.llmErrs, fmt.Sprintf("repregunta %s: %s; se usó la lógica local", rt.eng.CurrentTurnID(), degraded))
-				rt.svc.M.LLMFallbacks.WithLabelValues(rt.prov.ID()).Inc()
-				rt.sendErr(protocol.ErrLLMDegraded, "El proveedor LLM falló; se usa la lógica local de repreguntas.", false, nil)
-			}
-			action := strings.ToLower(res.Action)
-			rt.emit(rt.eng.ApplyDecision(engine.Decision{Followup: action == "followup", Text: res.Question, Probe: res.Probe}))
-		})
-	}()
+	rt.decideNow()
 }
 
 func (rt *Runtime) learn(t engine.Turn) {
@@ -844,6 +863,11 @@ func (rt *Runtime) emit(outs []engine.Out) {
 		switch d := o.Data.(type) {
 		case protocol.Question:
 			rt.send(o.Type, d)
+			if d.Kind != "closing" {
+				if n, ok := parseNo(d.UtteranceID, "u-"); ok {
+					rt.onPromptOut(n)
+				}
+			}
 			if d.Kind == "closing" {
 				rt.ttsSync(d.Text, d.UtteranceID)
 			} else {
@@ -852,6 +876,9 @@ func (rt *Runtime) emit(outs []engine.Out) {
 		case protocol.Followup:
 			rt.svc.M.Followups.WithLabelValues(d.Probe).Inc()
 			rt.send(o.Type, d)
+			if n, ok := parseNo(d.UtteranceID, "u-"); ok {
+				rt.onPromptOut(n)
+			}
 			rt.prompt(d.Text, d.UtteranceID)
 		case protocol.Pause:
 			rt.send(o.Type, d)
@@ -889,6 +916,31 @@ func (rt *Runtime) emit(outs []engine.Out) {
 	}
 }
 
+// armPlayedTimeout: el servidor espera tts.played de la intervención. Si no
+// llega en duration_ms + CX9_TTS_PLAYED_GRACE_MS (o CX9_TTS_PLAYED_TIMEOUT_MS si
+// la duración no se conoce) avanza igual. No es un error: métrica
+// cx9_tts_played_timeouts_total y log warn.
+func (rt *Runtime) armPlayedTimeout(utt, durationMs int) {
+	rt.stopListenTimer()
+	wait := rt.opt.TTSPlayedTimeout
+	if durationMs > 0 {
+		wait = time.Duration(durationMs)*time.Millisecond + rt.opt.TTSPlayedGrace
+	}
+	rt.listenTimer = time.AfterFunc(wait, func() {
+		rt.post(func() {
+			st := rt.eng.State()
+			if rt.quit || rt.eng.UtteranceNo() != utt || (st != engine.Intro && st != engine.Asking) {
+				return
+			}
+			rt.listenTimer = nil
+			rt.svc.M.TTSPlayedTimeouts.Inc()
+			rt.svc.Log.Warn("tts.played no llegó a tiempo; se avanza igual", "session_id", rt.id,
+				"utterance_id", fmt.Sprintf("u-%d", utt), "espera_ms", wait.Milliseconds())
+			rt.emit(rt.eng.PromptDelivered(utt))
+		})
+	})
+}
+
 func (rt *Runtime) stopListenTimer() {
 	if rt.listenTimer != nil {
 		rt.listenTimer.Stop()
@@ -915,6 +967,7 @@ func (rt *Runtime) prompt(text, uttID string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(rt.ctx, 40*time.Second)
 		defer cancel()
+		start := time.Now()
 		res, err := rt.svc.Speech.TTS(ctx, req)
 		rt.post(func() {
 			if rt.quit || rt.eng.UtteranceNo() != utt {
@@ -925,11 +978,10 @@ func (rt *Runtime) prompt(text, uttID string) {
 				rt.emit(rt.eng.PromptDelivered(utt))
 				return
 			}
-			rt.deliverTTS(uttID, res)
-			rt.stopListenTimer()
-			rt.listenTimer = time.AfterFunc(time.Duration(res.DurationMs)*time.Millisecond+rt.opt.ListenSlack, func() {
-				rt.post(func() { rt.emit(rt.eng.PromptDelivered(utt)) })
-			})
+			rt.svc.M.TurnStage.WithLabelValues("tts_first_byte").Observe(time.Since(start).Seconds())
+			if rt.deliverTTS(uttID, res) {
+				rt.armPlayedTimeout(utt, res.DurationMs)
+			}
 		})
 	}()
 }
@@ -949,7 +1001,9 @@ func (rt *Runtime) ttsSync(text, uttID string) {
 	rt.deliverTTS(uttID, res)
 }
 
-func (rt *Runtime) deliverTTS(uttID string, res *speech.TTSResult) {
+// deliverTTS manda el audio (frames o URL). false si no se mandó audio (solo
+// texto): en ese caso ya se avanzó y no hay que esperar tts.played.
+func (rt *Runtime) deliverTTS(uttID string, res *speech.TTSResult) bool {
 	utt, _ := parseNo(uttID, "u-")
 	format := res.Format
 	if format == "" {
@@ -964,13 +1018,14 @@ func (rt *Runtime) deliverTTS(uttID string, res *speech.TTSResult) {
 		exp := rt.svc.TTS.Put(rt.id, uttID, coach.TTSAudio{Audio: res.Audio, ContentType: ct, DurationMs: res.DurationMs})
 		rt.send(protocol.TTTSURL, protocol.TTSURL{UtteranceID: uttID, URL: "/v1/sessions/" + rt.id + "/tts/" + uttID, Format: "wav",
 			DurationMs: res.DurationMs, ExpiresAt: exp.UTC().Format(time.RFC3339)})
-		return
+		rt.onTTSSent(utt)
+		return true
 	}
 	if rt.conn != nil && rt.conn.heavy() {
 		rt.svc.M.WSBackpressure.WithLabelValues("tts_paused").Inc()
 		rt.sendErr(protocol.ErrTTSUnavailable, "Conexión cargada: la intervención va solo como texto.", true, nil)
 		rt.emit(rt.eng.PromptDelivered(utt))
-		return
+		return false
 	}
 	codec := protocol.CodecWAV
 	if format == "pcm16le" {
@@ -990,13 +1045,18 @@ func (rt *Runtime) deliverTTS(uttID string, res *speech.TTSResult) {
 			end = len(res.Audio)
 		}
 		rt.sendFrame(utt, i, i == chunks-1, codec, res.Audio[i*protocol.MaxPayload:end])
+		if i == 0 {
+			rt.onTTSSent(utt)
+		}
 	}
+	return true
 }
 
 // finish cierra la sesión: guarda, manda session.end, cierra y encola el informe.
 func (rt *Runtime) finish(d protocol.SessionEnd) {
 	rt.stopPartials()
 	rt.stopListenTimer()
+	rt.cancelEndpoint()
 	rt.persistTurns()
 	waitTimeout(&rt.learnWG, 15*time.Second)
 	rt.learnMu.Lock()

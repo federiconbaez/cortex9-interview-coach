@@ -30,6 +30,12 @@ type M struct {
 	LLMBreakerG    *prometheus.GaugeVec
 	LLMFallbacks   *prometheus.CounterVec
 	InventedTerms  prometheus.Counter
+	// Endpointing y latencia de turno (v1.2).
+	EndpointToTTS     *prometheus.HistogramVec // cx9_endpoint_to_followup_tts_seconds{mode,provider}
+	TurnStage         *prometheus.HistogramVec // cx9_turn_stage_seconds{stage}
+	Endpoints         *prometheus.CounterVec   // cx9_endpoints_total{source}
+	Speculative       *prometheus.CounterVec   // cx9_speculative_followups_total{result}
+	TTSPlayedTimeouts prometheus.Counter       // cx9_tts_played_timeouts_total
 }
 
 func New() *M {
@@ -52,6 +58,15 @@ func New() *M {
 		LLMFallbacks:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cx9_llm_fallbacks_total", Help: "Usos del respaldo local"}, []string{"provider"}),
 		InventedTerms:  prometheus.NewCounter(prometheus.CounterOpts{Name: "cx9_report_invented_terms_rejected_total", Help: "Términos inventados rechazados en mejoras"}),
 	}
+	turnLat := []float64{0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5, 10, 30}
+	m.EndpointToTTS = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "cx9_endpoint_to_followup_tts_seconds",
+		Help: "Desde el fin de voz detectado (endpoint) o audio.end (explicit) hasta el primer frame/URL de TTS de la siguiente intervención", Buckets: turnLat}, []string{"mode", "provider"})
+	m.TurnStage = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "cx9_turn_stage_seconds",
+		Help: "Etapas del cierre de turno: stt_final, llm_followup, tts_first_byte", Buckets: turnLat}, []string{"stage"})
+	m.Endpoints = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cx9_endpoints_total", Help: "Turnos cerrados por silencio"}, []string{"source"})
+	m.Speculative = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cx9_speculative_followups_total", Help: "Decisiones especulativas de repregunta"}, []string{"result"})
+	m.TTSPlayedTimeouts = prometheus.NewCounter(prometheus.CounterOpts{Name: "cx9_tts_played_timeouts_total", Help: "Intervenciones en las que tts.played no llegó a tiempo y el servidor avanzó igual"})
+	r.MustRegister(m.EndpointToTTS, m.TurnStage, m.Endpoints, m.Speculative, m.TTSPlayedTimeouts)
 	r.MustRegister(m.HTTPRequests, m.HTTPDuration, m.WSConnections, m.WSMessages, m.WSBackpressure, m.SessionsActive, m.Sessions,
 		m.Followups, m.SpeechDuration, m.SpeechErrors, m.LLMDuration, m.LLMBreakerG, m.LLMFallbacks, m.InventedTerms)
 	return m

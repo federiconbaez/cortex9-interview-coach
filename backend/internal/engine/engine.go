@@ -145,6 +145,9 @@ func uttID(n int) string  { return fmt.Sprintf("u-%d", n) }
 // UtteranceNo devuelve el número de la intervención vigente.
 func (e *Engine) UtteranceNo() int { return e.cur.uttNo }
 
+// CurrentText es el texto de la intervención vigente (pregunta o repregunta).
+func (e *Engine) CurrentText() string { return e.cur.text }
+
 func errOut(code, msg string, retry bool) Out {
 	return Out{protocol.TError, protocol.Error{Code: code, Message: msg, Retryable: retry}}
 }

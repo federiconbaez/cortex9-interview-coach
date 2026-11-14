@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/coach"
+	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/endpoint"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/engine"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/protocol"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/store"
@@ -29,7 +30,10 @@ type Options struct {
 	MaxInflightBytes int
 	PartialInterval  time.Duration
 	PartialWindow    time.Duration
-	ListenSlack      time.Duration
+	TTSPlayedGrace   time.Duration   // espera de tts.played además de duration_ms (CX9_TTS_PLAYED_GRACE_MS)
+	TTSPlayedTimeout time.Duration   // espera de tts.played si la duración no se conoce (CX9_TTS_PLAYED_TIMEOUT_MS)
+	Endpoint         endpoint.Config // endpointing por silencio (CX9_ENDPOINT_*)
+	Speculative      bool            // decisión especulativa de repregunta con el último parcial
 	ReplayMax        int
 	ReplayAge        time.Duration
 }
@@ -39,7 +43,8 @@ func DefaultOptions() Options {
 	return Options{HelloTimeout: 5 * time.Second, Heartbeat: protocol.HeartbeatMs * time.Millisecond,
 		IdleTimeout: protocol.IdleTimeoutMs * time.Millisecond, Grace: protocol.ReconnectGraceMs * time.Millisecond,
 		MaxPause: protocol.MaxPauseMs * time.Millisecond, MaxTurnMs: 300000, MaxInflightBytes: 96000,
-		PartialInterval: 1500 * time.Millisecond, PartialWindow: 12 * time.Second, ListenSlack: 3 * time.Second,
+		PartialInterval: 1500 * time.Millisecond, PartialWindow: 12 * time.Second, TTSPlayedGrace: 3 * time.Second, TTSPlayedTimeout: 20 * time.Second,
+		Endpoint: endpoint.Default(), Speculative: true,
 		ReplayMax: 512, ReplayAge: 60 * time.Second}
 }
 

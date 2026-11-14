@@ -72,6 +72,22 @@ type STTResult struct {
 	Fillers     []Filler `json:"fillers,omitempty"`
 	FillerCount *int     `json:"filler_count,omitempty"`
 	Pauses      []Pause  `json:"pauses,omitempty"`
+	// Endpointing (v1.2, opcionales, sobre todo en parciales): fin de la voz en
+	// ms relativo al inicio del audio mandado y silencio final en ms.
+	SpeechEndedMs     *float64 `json:"speech_ended_ms,omitempty"`
+	TrailingSilenceMs *float64 `json:"trailing_silence_ms,omitempty"`
+}
+
+// Endpoint devuelve los campos de endpointing redondeados a ms (nil si no vinieron).
+func (r *STTResult) Endpoint() (speechEnded, trailing *int) {
+	conv := func(f *float64) *int {
+		if f == nil || *f < 0 {
+			return nil
+		}
+		v := int(*f + 0.5)
+		return &v
+	}
+	return conv(r.SpeechEndedMs), conv(r.TrailingSilenceMs)
 }
 
 // FillerTexts devuelve las muletillas detectadas por /speech, o nil si no vinieron.

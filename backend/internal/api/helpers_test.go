@@ -3,12 +3,15 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/app"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/auth"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/config"
+	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/endpoint"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/live"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/protocol"
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/secret"
@@ -43,7 +47,9 @@ type fakeSpeech struct {
 	transcripts []string
 	sttFail     []string // X-Mock-Fail para los próximos /stt finales
 	partialBusy bool
-	noFillers   bool // fuerza fillers: [] y filler_count: 0 en los /stt finales
+	noFillers   bool   // fuerza fillers: [] y filler_count: 0 en los /stt finales
+	partialText string // texto de los parciales (default "parcial en curso")
+	noVAD       bool   // parciales sin speech_ended_ms/trailing_silence_ms (servicio viejo)
 	partials    int
 	finals      int
 	h           http.Handler
@@ -54,7 +60,7 @@ func (f *fakeSpeech) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		if r.URL.Query().Get("partial") == "true" {
 			f.partials++
-			busy := f.partialBusy
+			busy, pt, noVAD := f.partialBusy, f.partialText, f.noVAD
 			f.mu.Unlock()
 			if busy {
 				w.Header().Set("Content-Type", "application/problem+json")
@@ -63,7 +69,13 @@ func (f *fakeSpeech) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write([]byte(`{"type":"urn:cx9:problem:dependency-unavailable","title":"busy","status":503,"code":"DEPENDENCY_UNAVAILABLE"}`))
 				return
 			}
-			r.Header.Set("X-Mock-Transcript", "parcial en curso")
+			if pt == "" {
+				pt = "parcial en curso"
+			}
+			r.Header.Set("X-Mock-Transcript", url.QueryEscape(pt))
+			if noVAD {
+				r.Header.Set("X-Mock-VAD", "off")
+			}
 			f.h.ServeHTTP(w, r)
 			return
 		}
@@ -129,7 +141,10 @@ func newEnv(t *testing.T, mut func(*config.Config, *live.Options)) *env {
 	cfg.DataDir = t.TempDir()
 	cfg.DatabaseURL = "sqlite://" + cfg.DataDir + "/test.db"
 	opt := live.DefaultOptions()
-	opt.ListenSlack = 200 * time.Millisecond
+	opt.TTSPlayedGrace = 200 * time.Millisecond
+	// Los tests viejos mandan silencio con audio.end; el endpointing se prueba
+	// aparte (endpoint_test.go) con fastEndpoint.
+	opt.Endpoint.Mode = endpoint.Off
 	if mut != nil {
 		mut(cfg, &opt)
 	}
@@ -442,4 +457,89 @@ func degradedSpeech(t *testing.T) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// fastEndpoint activa el endpointing con tiempos cortos para tests.
+func fastEndpoint(mode string) func(*config.Config, *live.Options) {
+	return func(_ *config.Config, o *live.Options) {
+		o.Endpoint = endpoint.Default()
+		o.Endpoint.Mode = mode
+		o.PartialInterval = 300 * time.Millisecond
+	}
+}
+
+// voice genera "voz" sintética (seno de 220 Hz, amplitud 8000) de ms milisegundos.
+func voice(ms int) []byte {
+	n := ms * 16
+	b := make([]byte, 2*n)
+	for i := 0; i < n; i++ {
+		v := int16(8000 * math.Sin(2*math.Pi*220*float64(i)/16000))
+		binary.LittleEndian.PutUint16(b[2*i:], uint16(v))
+	}
+	return b
+}
+
+// stream manda pcm en chunks de 100 ms a ritmo real (o más rápido con speed > 1)
+// desde el chunk idx; devuelve el próximo índice.
+func (w *wsClient) stream(turn, idx uint32, pcm []byte, speed float64) uint32 {
+	w.t.Helper()
+	for i := 0; i < len(pcm); i += 3200 {
+		end := min(i+3200, len(pcm))
+		w.frame(turn, idx, pcm[i:end])
+		idx++
+		time.Sleep(time.Duration(float64(100*time.Millisecond) / speed))
+	}
+	return idx
+}
+
+// firstAnswerTurn saltea la intro (con tts.played) y devuelve el turno de la primera pregunta.
+func (w *wsClient) firstAnswerTurn() (string, uint32) {
+	w.t.Helper()
+	w.expect("session.ready")
+	for {
+		typ, d, _ := w.prompt()
+		if typ != "question" {
+			w.t.Fatalf("esperaba pregunta: %s", typ)
+		}
+		utt := d["utterance_id"].(string)
+		w.expect("tts.audio")
+		w.send("tts.played", map[string]any{"utterance_id": utt})
+		if d["kind"] == "intro" {
+			continue
+		}
+		tid := d["turn_id"].(string)
+		var n int
+		_, _ = fmtSscan(tid, &n)
+		return tid, uint32(n)
+	}
+}
+
+// metric lee un valor de /metrics (línea que empieza con prefix); -1 si no está.
+func (e *env) metric(prefix string) float64 {
+	e.t.Helper()
+	res, err := http.Get(e.srv.URL + "/metrics")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, prefix+" ") {
+			v, _ := strconv.ParseFloat(strings.TrimSpace(l[len(prefix):]), 64)
+			return v
+		}
+	}
+	return -1
+}
+
+// noErrors falla si el cliente recibió algún error.
+func (w *wsClient) noErrors() {
+	w.t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, m := range w.all {
+		if m.Type == "error" {
+			w.t.Fatalf("error inesperado: %s", m.Data)
+		}
+	}
 }

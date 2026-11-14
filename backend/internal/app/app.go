@@ -97,6 +97,8 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	opt := live.DefaultOptions()
 	opt.Grace, opt.MaxTurnMs = cfg.ReconnectGrace, cfg.MaxTurnMs
 	opt.PartialInterval, opt.PartialWindow = cfg.PartialInterval, cfg.PartialWindow
+	opt.Endpoint, opt.Speculative = cfg.Endpoint, cfg.SpeculativeFollowup
+	opt.TTSPlayedGrace, opt.TTSPlayedTimeout = cfg.TTSPlayedGrace, cfg.TTSPlayedTimeout
 	a, err := Build(ctx, cfg, log, opt)
 	if err != nil {
 		return err
