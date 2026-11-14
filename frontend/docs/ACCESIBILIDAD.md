@@ -1,11 +1,13 @@
 # Accesibilidad — notas
 
 Objetivo: WCAG 2.1 AA. Verificado con axe (`@axe-core/playwright`, etiquetas wcag2a, wcag2aa,
-wcag21a, wcag21aa): 7 chequeos en 5 de los 14 e2e contra el mock — pantalla de login y app ya
+wcag21a, wcag21aa): 7 chequeos en 5 de los 14 e2e de la práctica contra el mock — pantalla de login y app ya
 logueada, historial, perfil, vuelta al login por 401 (con el aviso de sesión vencida), y sesión
 por voz (durante la sesión y en el informe, con muletillas y pausas). Contra el backend real
 (`test:e2e:real`) hay 2 chequeos más: el informe de la sesión por texto y el de la sesión por voz.
 La sesión por texto contra el mock, push-to-talk, reconexión, repetir y `tts_delivery: none` no corren axe.
+"Subtítulos en vivo" suma 2 chequeos en 2 e2e: la vista con subtítulos y la confirmación de
+proveedor remoto abierta. La vista con el aviso remoto persistente no corre axe.
 
 ## Qué hace la UI
 
@@ -24,6 +26,11 @@ La sesión por texto contra el mock, push-to-talk, reconexión, repetir y `tts_d
 - **Movimiento reducido:** las animaciones solo se activan con `prefers-reduced-motion: no-preference`.
 - **Contraste:** paleta clara y oscura (`prefers-color-scheme`); foco visible con `:focus-visible`.
 - **Idioma:** `<html lang>` sigue al idioma elegido (es/en).
+- **Subtítulos en vivo:** solo los finales se anuncian (`aria-live="polite"` aparte, con el
+  original y la traducción); los parciales se ven pero no se anuncian. El tamaño de letra va de
+  100 % a 200 %. No hay animaciones: el desplazamiento al último subtítulo es instantáneo. Cada
+  línea marca su idioma con `lang`. La confirmación de proveedor remoto es un `alertdialog` que
+  recibe el foco. Todo se maneja con controles nativos (teclado).
 - **Sesión vencida:** si el backend responde 401 o cierra con 4001, se vuelve al login con el
   aviso en `role="alert"`.
 - **Repeticiones:** cuando la entrevistadora repite una pregunta, la etiqueta visible agrega

@@ -33,8 +33,9 @@ frontend/
 ├── public/capture-worklet.js      procesador del AudioWorklet (archivo aparte por la CSP)
 ├── mock-server/server.mjs         mock del contrato v1.1 para los e2e (no es el backend real)
 ├── e2e-real/                      e2e contra el backend Go real (`npm run test:e2e:real`)
+├── mock-server/captions.mjs       mock del servicio de subtítulos (contrato WS v0.2)
 ├── e2e/                           Playwright
-└── docs/                          VAD.md, ACCESIBILIDAD.md
+└── docs/                          VAD.md, ACCESIBILIDAD.md, SUBTITULOS.md
 ```
 
 - **Todo same-origin.** La app llama exactamente a `/v1/...`. En desarrollo, el proxy de
@@ -59,6 +60,10 @@ frontend/
 - **Turnos.** `repeat: true` marca una re-emisión: `control.repeat` repite el mismo turno; tras
   `NO_AUDIO` o un fallo de STT llega `turn.end` con `next: repeat` y la misma pregunta con
   `turn_id` nuevo. Con `tts_delivery: none` no se manda `tts.played`; tampoco para el cierre.
+- **Subtítulos en vivo** (`#/subtitulos`): vista aparte que solo transcribe y traduce el audio del
+  sistema. Usa el servicio `captions` de Apex por `/captions/v1/live` y no se conecta con la
+  práctica ni con el backend de Nexus. No sugiere respuestas y no guarda nada. Ver
+  [docs/SUBTITULOS.md](docs/SUBTITULOS.md).
 - **Build:** `dist/` (lo copia `deploy/frontend/Dockerfile`).
 
 ## Cómo correr
@@ -76,7 +81,12 @@ Sin backend, contra el mock del contrato:
 ```bash
 npm run mock                                              # mock en 127.0.0.1:8787, contraseña: practica
 COACH_BACKEND_URL=http://127.0.0.1:8787 npm run dev
+npm run mock:captions                                     # subtítulos mock en 127.0.0.1:18791
+COACH_CAPTIONS_URL=http://127.0.0.1:18791 npm run dev     # → http://127.0.0.1:5173/#/subtitulos
 ```
+
+El proxy de Vite reenvía `/captions` a `COACH_CAPTIONS_URL` (por defecto `http://127.0.0.1:8091`)
+y reescribe `/captions/v1/live` → `/v1/captions/live`.
 
 `deploy/local/run-frontend.sh` (de deploy) ya exporta `COACH_BACKEND_URL` al puerto del backend.
 
@@ -94,7 +104,7 @@ npm run test:e2e                 # Playwright contra el mock, Chromium con medio
 npm run test:e2e:real            # opcional: contra el backend Go real (necesita Go; no está en CI)
 ```
 
-Los e2e levantan el mock en `127.0.0.1:8787` y `vite build && vite preview` en
+Los e2e levantan el mock en `127.0.0.1:8787`, el mock de subtítulos en `127.0.0.1:18791` y `vite build && vite preview` en
 `127.0.0.1:4173` con la misma CSP que `deploy/frontend/nginx.conf`. Chromium se lanza con
 `--use-fake-device-for-media-stream` y `--use-fake-ui-for-media-stream`. Ningún test usa red
 externa. `forbidOnly` está activo y no hay tests `skip`/`todo`. El mock acepta
@@ -120,24 +130,24 @@ compila el árbol de trabajo de `backend/`, con lo que haya sin commitear.
 
 ## Resultados medidos
 
-Corrida desde un clon limpio del commit `436f2a1` (código y tests; los docs no cambian el
+Corrida desde un clon limpio del commit `35c3c15` (código y tests; los docs no cambian el
 resultado), con Node v22.23.5, el 14/11/2026:
 
 - `npm ci`: 267 paquetes.
 - `npm run lint` y `npm run typecheck`: sin errores ni warnings.
-- `npm test`: **13 archivos, 107 tests, 107 pasan**, 0 omitidos.
-  Cobertura: sentencias 91,92 % (1366/1486), ramas 82,42 % (882/1070), funciones 83,37 % (341/409),
-  líneas 94,91 % (1194/1258).
-- `npm run test:e2e`: **14 tests, 14 pasan** (31,2 s); 5 de ellos hacen en total 7 chequeos axe (WCAG 2.0/2.1 A y AA).
-- `npm run test:e2e:real` con el backend compilado del commit `7f510cf` (backend/ igual que en
-  `a1be862`): **2 tests, 2 pasan** (18,5 s), con 2 chequeos axe. Con el backend de `64324df`
-  (regla de Origin y fix de muletillas_fuente): **2 de 2** (16,3 s), y también 2 de 2 con
-  `CX9_CORS_ORIGINS` apuntando a otro puerto (el WS pasa por Origin igual a Host).
-- `npm run build`: `dist/` = 236 755 bytes (JS 230 483 B, 73,02 kB gzip; CSS 5 428 B;
+- `npm test`: **16 archivos, 133 tests, 133 pasan**, 0 omitidos.
+  Cobertura: sentencias 92,58 % (1685/1820), ramas 84,11 % (1197/1423), funciones 85,17 % (431/506),
+  líneas 95,39 % (1470/1541).
+- `npm run test:e2e`: **20 tests, 20 pasan** (45,2 s): 14 de la práctica y 6 de subtítulos. 7 de
+  ellos hacen en total 9 chequeos axe (WCAG 2.0/2.1 A y AA).
+- `npm run test:e2e:real` (backend Go real; el código de la práctica no cambió desde `7bd1433`):
+  **2 tests, 2 pasan** con el backend de `64324df`.
+- `npm run build`: `dist/` = 261 693 bytes (JS 254 815 B, 79,78 kB gzip; CSS 6 034 B;
   `capture-worklet.js` 381 B; `index.html` 463 B).
 
 Tests unitarios por archivo: ws 23, live 11, views (SetupForm, ReportView, HistoryView, perfil) 10,
-vad 9, App 8, client 8, SessionView 8, pcm 7, tts 6, i18n 6, history 4, profile 4, mic 3.
+vad 9, captions/connection 9, captions/state 9, App 8, client 8, CaptionsView 8, SessionView 8,
+pcm 7, tts 6, i18n 6, history 4, profile 4, mic 3.
 
 ## Qué está probado y qué no
 
@@ -165,7 +175,17 @@ Probado:
   repreguntas, cierre, informe con muletillas detectadas en el texto) y por voz (TTS wav,
   repetir con `repeat: true`, `NO_AUDIO` con la misma pregunta y `turn_id` nuevo, 4,5 s de audio
   con mensajes `ack` de seq 0, presentación t-0/índice 0, cierre t-0/índice total, hello seq 0,
-  seq del cliente crecientes, informe). El e2e de voz corre con la CSP de deploy y verifica que no haya errores de CSP en consola.
+  seq del cliente crecientes, informe).
+- Subtítulos (unitarios y e2e contra el mock v0.2):
+  - parciales reemplazados por `segment_id`, finales con y sin traducción, final sin parciales,
+    parcial tardío ignorado;
+  - UI según `config.applied` y rechazos (`DEVICE_NOT_FOUND`);
+  - aviso remoto con confirmación y aviso persistente;
+  - proveedores e idiomas deshabilitados;
+  - pausa, sin audio, `CAPTURE_FAILED` y nivel;
+  - reconexión tras 1011 sin replay, 4409 sin reintento automático y 1008;
+  - `aria-live` solo con finales, tamaño de letra y nada persistido;
+  - ninguna llamada a `/v1` desde la vista. El e2e de voz corre con la CSP de deploy y verifica que no haya errores de CSP en consola.
 
 No probado:
 
@@ -173,6 +193,8 @@ No probado:
   contra el mock). `Turn.stt_fillers` y `Turn.pauses` del detalle de sesión: la UI no pide ese
   endpoint; el informe muestra `details.muletillas`, `muletillas_fuente` y `details.pausas`.
 - Navegadores distintos de Chromium (Firefox, Safari).
+- Subtítulos contra el servicio real de Apex (todavía no está en el repo, ni su
+  `captions/CONTRACT.md`; los supuestos están en docs/SUBTITULOS.md).
 - El corte automático por silencio con un micrófono real: el dispositivo falso de Chromium emite
   un tono continuo, así que en e2e la respuesta se termina con el botón.
 - `live-ticket` (opcional en v1.1; no se usa: la cookie alcanza con el proxy same-origin).
