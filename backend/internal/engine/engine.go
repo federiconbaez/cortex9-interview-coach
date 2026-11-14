@@ -62,7 +62,10 @@ type Turn struct {
 	LowConfidence     []string `json:"low_confidence"`
 	Skipped           bool     `json:"skipped"`
 	// Extensiones (si /speech las mandó): muletillas con contexto de pausas y pausas largas.
-	STTFillers []string    `json:"stt_fillers,omitempty"`
+	// STTFillers es puntero para distinguir "ausente" (nil, se omite) de "vacío"
+	// (/speech informó cero muletillas, se serializa como []). El turno se guarda
+	// como JSON, así que la diferencia se conserva igual en SQLite y en Postgres.
+	STTFillers *[]string   `json:"stt_fillers,omitempty"`
 	Pauses     *PauseStats `json:"pauses,omitempty"`
 }
 
@@ -308,7 +311,7 @@ func (e *Engine) Final(a Answer) (outs []Out, needDecision bool) {
 			DurationMs: int(a.DurationS * 1000), Confidence: a.Confidence, LowConfidence: a.LowConfidence, Source: a.Source}})
 	}
 	e.record(Turn{Answer: text, DurationS: analysis.Round(a.DurationS, 3), DurationEstimated: a.Estimated, LowConfidence: a.LowConfidence,
-		STTFillers: a.Fillers, Pauses: a.Pauses})
+		STTFillers: sttFillers(a.Fillers), Pauses: a.Pauses})
 	if text == "" {
 		return append(outs, e.advance(e.lastEndReason)...), false
 	}
@@ -539,4 +542,14 @@ func (e *Engine) CurrentPrompt() []Out {
 		return []Out{e.promptOut("repeat")}
 	}
 	return nil
+}
+
+// sttFillers conserva la diferencia entre nil (/speech no mandó la extensión) y
+// lista vacía (/speech informó cero muletillas).
+func sttFillers(f []string) *[]string {
+	if f == nil {
+		return nil
+	}
+	c := append([]string{}, f...)
+	return &c
 }

@@ -256,7 +256,8 @@ func Heuristic(t engine.Turn, q engine.Question, in *Input) TurnScore {
 	fsrc := "texto"
 	if t.STTFillers != nil && strings.TrimSpace(ans) != "" {
 		// /speech marca muletillas con el contexto de las pausas (más preciso que el texto solo).
-		fill, fsrc = append([]string{}, t.STTFillers...), "stt"
+		// Una lista vacía también cuenta: /speech informó cero muletillas.
+		fill, fsrc = append([]string{}, (*t.STTFillers)...), "stt"
 		if n := analysis.WordCount(ans); n > 0 {
 			rate = 100 * float64(len(fill)) / float64(n)
 		}

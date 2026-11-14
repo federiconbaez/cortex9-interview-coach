@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/federiconbaez/cortex9-interview-coach/backend/internal/protocol"
@@ -283,5 +285,31 @@ func TestRepeatFollowupKeepsTurnAndCount(t *testing.T) {
 	q := e.Repeat("")
 	if q[0].Data.(protocol.Followup).FollowupIndex != 1 {
 		t.Fatal("no consume repregunta")
+	}
+}
+
+// stt_fillers distingue ausente (se omite) de vacío ([]), y sobrevive al JSON con
+// el que se persiste el turno en SQLite y en Postgres.
+func TestSTTFillersAbsentVsEmptyRoundTrip(t *testing.T) {
+	for _, c := range []struct {
+		in      []string
+		want    string
+		present bool
+	}{{nil, "", false}, {[]string{}, `"stt_fillers":[]`, true}, {[]string{"eh"}, `"stt_fillers":["eh"]`, true}} {
+		tu := Turn{ID: "t-1", STTFillers: sttFillers(c.in)}
+		b, err := json.Marshal(tu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.present != strings.Contains(string(b), `"stt_fillers"`) || (c.want != "" && !strings.Contains(string(b), c.want)) {
+			t.Fatalf("%v → %s", c.in, b)
+		}
+		var back Turn
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		if (back.STTFillers != nil) != c.present || (c.present && len(*back.STTFillers) != len(c.in)) {
+			t.Fatalf("ida y vuelta %v → %v", c.in, back.STTFillers)
+		}
 	}
 }

@@ -138,7 +138,7 @@ func TestDurationAndFillerScores(t *testing.T) {
 
 func TestSTTFillersPreferred(t *testing.T) {
 	in := input()
-	in.Turns[0].STTFillers = []string{"eh"}
+	in.Turns[0].STTFillers = &[]string{"eh"}
 	in.Turns[0].Pauses = &engine.PauseStats{Count: 2, TotalS: 1.5, LongestS: 0.9}
 	r := (&Scorer{LLM: llm.NewMock()}).Evaluate(context.Background(), in)
 	d := r.Blocks[0].Turns[0].Details
@@ -147,5 +147,18 @@ func TestSTTFillersPreferred(t *testing.T) {
 	}
 	if r.Blocks[1].Turns[0].Details.Pausas != nil || r.Blocks[1].Turns[0].Details.MuletillasFuente != "texto" {
 		t.Fatal("sin datos de STT: pausas null y fuente texto")
+	}
+}
+
+// Regresión: /speech informó cero muletillas (lista vacía). La fuente sigue siendo
+// el STT aunque el texto tenga palabras que el detector por texto contaría.
+func TestEmptySTTFillersStillSTTSource(t *testing.T) {
+	in := input()
+	in.Turns[0].Answer = "Bueno, o sea, trabajé tres años en Telecom con Go."
+	in.Turns[0].STTFillers = &[]string{}
+	r := (&Scorer{LLM: llm.NewMock()}).Evaluate(context.Background(), in)
+	d := r.Blocks[0].Turns[0].Details
+	if d.MuletillasFuente != "stt" || len(d.Muletillas) != 0 || d.Muletillas == nil || d.MuletillasCada100 != 0 {
+		t.Fatalf("%+v", d)
 	}
 }

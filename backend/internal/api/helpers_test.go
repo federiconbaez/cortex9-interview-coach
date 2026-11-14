@@ -43,6 +43,7 @@ type fakeSpeech struct {
 	transcripts []string
 	sttFail     []string // X-Mock-Fail para los próximos /stt finales
 	partialBusy bool
+	noFillers   bool // fuerza fillers: [] y filler_count: 0 en los /stt finales
 	partials    int
 	finals      int
 	h           http.Handler
@@ -67,6 +68,7 @@ func (f *fakeSpeech) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.finals++
+		noFillers := f.noFillers
 		if len(f.sttFail) > 0 {
 			r.Header.Set("X-Mock-Fail", f.sttFail[0])
 			f.sttFail = f.sttFail[1:]
@@ -75,6 +77,25 @@ func (f *fakeSpeech) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.transcripts = f.transcripts[1:]
 		}
 		f.mu.Unlock()
+		if noFillers {
+			rec := httptest.NewRecorder()
+			f.h.ServeHTTP(rec, r)
+			body := rec.Body.Bytes()
+			if rec.Code == 200 {
+				var m map[string]any
+				if err := json.Unmarshal(body, &m); err == nil {
+					m["fillers"], m["filler_count"] = []any{}, 0
+					body, _ = json.Marshal(m)
+				}
+			}
+			for k, v := range rec.Header() {
+				w.Header()[k] = v
+			}
+			w.Header().Del("Content-Length")
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(body)
+			return
+		}
 	}
 	f.h.ServeHTTP(w, r)
 }
