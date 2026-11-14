@@ -1,0 +1,7 @@
+# binario local
+/coach
+# datos locales (SQLite, audio guardado con save_audio)
+/data/
+*.db
+*.db-shm
+*.db-wal
