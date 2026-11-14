@@ -10,6 +10,11 @@ Practicás respondiendo preguntas de entrevista en voz alta; el coach transcribe
 - **No es** una herramienta de asistencia en vivo. **No existe ningún modo para escuchar a un entrevistador real** ni para soplar respuestas durante una entrevista verdadera, y no se va a agregar.
 - Tu audio y tu perfil **se quedan en tu máquina**. Lo único que sale es lo que vos decidas enviar al proveedor de LLM que elijas (o nada, si usás un modelo local o el modo mock).
 
+## Estado
+
+- Herramienta de práctica personal, en desarrollo. Solo procesa **tu propia voz** desde el micrófono mientras practicás con el coach; no captura el audio del sistema ni de otras personas.
+- La vista "Subtítulos en vivo" (transcripción y traducción del audio del sistema) se separó a un repo propio, todavía en desarrollo, y no forma parte de este repo.
+
 ## Componentes
 
 | Carpeta | Componente | Responsable |

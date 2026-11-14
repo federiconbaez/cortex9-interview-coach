@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, createApiClient, withUnauthorizedHandler, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
 import { LANGS, type CaptureMode, type InputMode, type Lang } from './api/schema';
-import { CaptionsView } from './components/CaptionsView';
 import { HistoryView } from './components/HistoryView';
 import { Login } from './components/Login';
 import { ProfilePage } from './components/ProfileEditor';
@@ -10,7 +9,6 @@ import { ReportView } from './components/ReportView';
 import { SessionView } from './components/SessionView';
 import { SetupForm, type StartRequest } from './components/SetupForm';
 import { I18nProvider, useI18n } from './i18n';
-import type { CaptionsDeps } from './captions/useCaptions';
 import { defaultLiveDeps, type LiveDeps } from './state/useLiveSession';
 
 type View =
@@ -21,18 +19,6 @@ type View =
   | { name: 'profile' };
 
 const LANG_KEY = 'cx9.lang';
-/** Ruta propia de "Subtítulos en vivo": no pasa por el login ni por la API del motor de entrevistas. */
-export const CAPTIONS_HASH = '#/subtitulos';
-
-function useHash(): string {
-  const [hash, setHash] = useState(() => globalThis.location?.hash ?? '');
-  useEffect(() => {
-    const on = () => setHash(globalThis.location.hash);
-    globalThis.addEventListener('hashchange', on);
-    return () => globalThis.removeEventListener('hashchange', on);
-  }, []);
-  return hash;
-}
 
 function initialLang(): Lang {
   try {
@@ -49,8 +35,7 @@ export function wsUrlFrom(liveUrl: string, loc: { protocol: string; host: string
   return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}${liveUrl}`;
 }
 
-export function App({ client, liveDeps, captionsDeps }: { client?: ApiClient; liveDeps?: LiveDeps; captionsDeps?: CaptionsDeps }) {
-  const hash = useHash();
+export function App({ client, liveDeps }: { client?: ApiClient; liveDeps?: LiveDeps }) {
   const api = useMemo(() => client ?? createApiClient(), [client]);
   const deps = useMemo(() => liveDeps ?? defaultLiveDeps((p) => api.resolve(p)), [liveDeps, api]);
   const [lang, setLangState] = useState<Lang>(initialLang);
@@ -67,61 +52,15 @@ export function App({ client, liveDeps, captionsDeps }: { client?: ApiClient; li
   }, [lang]);
   return (
     <I18nProvider lang={lang} setLang={setLang}>
-      {hash === CAPTIONS_HASH ? <CaptionsShell deps={captionsDeps} /> : <Shell rawApi={api} deps={deps} />}
+      <Shell rawApi={api} deps={deps} />
     </I18nProvider>
-  );
-}
-
-function LangSelect({ disabled = false }: { disabled?: boolean }) {
-  const { t, lang, setLang } = useI18n();
-  return (
-    <>
-      <label htmlFor="lang" className="visually-hidden">
-        {t('lang.label')}
-      </label>
-      <select id="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} title={t('lang.label')} disabled={disabled}>
-        {LANGS.map((l) => (
-          <option key={l} value={l}>
-            {t(`lang.${l}`)}
-          </option>
-        ))}
-      </select>
-    </>
-  );
-}
-
-/** Vista aislada de subtítulos: sin ApiProvider, sin login, sin estado de la práctica. */
-function CaptionsShell({ deps }: { deps?: CaptionsDeps | undefined }) {
-  const { t } = useI18n();
-  const mainRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    mainRef.current?.focus();
-  }, []);
-  return (
-    <>
-      <a href="#main" className="skip">
-        {t('app.skip')}
-      </a>
-      <header className="top">
-        <div className="brand">
-          <h1>{t('nav.captions')}</h1>
-          <a href="#/">{t('captions.back')}</a>
-        </div>
-        <div className="row">
-          <LangSelect />
-        </div>
-      </header>
-      <main id="main" ref={mainRef} tabIndex={-1}>
-        <CaptionsView deps={deps} />
-      </main>
-    </>
   );
 }
 
 type Auth = { s: 'checking' } | { s: 'in' } | { s: 'out'; expired?: boolean } | { s: 'error'; message: string };
 
 function Shell({ rawApi, deps }: { rawApi: ApiClient; deps: LiveDeps }) {
-  const { t } = useI18n();
+  const { t, lang, setLang } = useI18n();
   const [view, setView] = useState<View>({ name: 'practice' });
   const [auth, setAuth] = useState<Auth>({ s: 'checking' });
   // 401 UNAUTHENTICATED en cualquier llamada (cookie vencida o revocada) → vuelve al login.
@@ -179,8 +118,16 @@ function Shell({ rawApi, deps }: { rawApi: ApiClient; deps: LiveDeps }) {
           <p className="muted">{t('app.tagline')}</p>
         </div>
         <div className="row">
-          {view.name !== 'live' && <a href={CAPTIONS_HASH}>{t('nav.captions')}</a>}
-          <LangSelect disabled={view.name === 'live'} />
+          <label htmlFor="lang" className="visually-hidden">
+            {t('lang.label')}
+          </label>
+          <select id="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} title={t('lang.label')} disabled={view.name === 'live'}>
+            {LANGS.map((l) => (
+              <option key={l} value={l}>
+                {t(`lang.${l}`)}
+              </option>
+            ))}
+          </select>
           {auth.s === 'in' && (
             <button type="button" className="link" onClick={() => void api.logout().finally(check)}>
               {t('login.logout')}
